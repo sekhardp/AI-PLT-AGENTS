@@ -35,6 +35,7 @@ class MCPRegistryClient:
     def __init__(self, registry_url: str, timeout_seconds: int = 60) -> None:
         self.registry_url = registry_url
         self.timeout_seconds = timeout_seconds
+        self.last_error: str | None = None
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """Connect to the MCP Registry Gateway and retrieve all registered tools."""
@@ -62,13 +63,15 @@ class MCPRegistryClient:
                                 "description": tool.description or f"Tool: {tool.name}",
                                 "input_schema": schema,
                             })
+                        self.last_error = None
                         logger.info("mcp_tools_discovered", count=len(tools))
                         return tools
         except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e!s}"
             logger.warning(
                 "mcp_tool_discovery_failed",
                 registry_url=self.registry_url,
-                error=str(e),
+                error=self.last_error,
             )
             return []
 

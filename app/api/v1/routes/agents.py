@@ -35,7 +35,7 @@ async def agent_health(agent_id: str, request: Request):
 
 
 @router.post("/sync", tags=["Agents"])
-async def sync_agents(request: Request):
+async def sync_agents(request: Request, registry_url: str | None = None):
     """Dynamically re-sync tools from the MCP Registry Gateway without restarting."""
     registry = get_registry(request)
     mcp_client = getattr(request.app.state, "mcp_client", None)
@@ -43,14 +43,19 @@ async def sync_agents(request: Request):
     if not mcp_client or not gemini_client or not registry:
         raise HTTPException(status_code=503, detail="Services not fully initialized")
 
+    if registry_url:
+        mcp_client.registry_url = registry_url
+
     from app.core.bootstrap import sync_mcp_tools
     try:
         tools = await sync_mcp_tools(mcp_client, registry, gemini_client)
         return {
-            "status": "ok",
+            "status": "ok" if len(tools) > 0 else "warning",
+            "registry_url": mcp_client.registry_url,
             "discovered_tools_count": len(tools),
             "total_registered_agents": registry.count,
             "tools": [t["name"] for t in tools],
+            "last_error": getattr(mcp_client, "last_error", None),
         }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"MCP sync failed: {e!s}")
