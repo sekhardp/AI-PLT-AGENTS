@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 from fastapi import FastAPI
@@ -17,6 +18,29 @@ from app.agents.orchestrator import OrchestratorAgent
 from app.agents.mcp import MCPAgent
 
 logger = structlog.get_logger(__name__)
+
+
+async def sync_mcp_tools(
+    mcp_client: MCPRegistryClient,
+    registry: AgentRegistry,
+    llm_client: GeminiClient,
+) -> list[dict[str, Any]]:
+    """Discover tools from MCP Registry Gateway and dynamically register MCPAgents."""
+    tools = await mcp_client.list_tools()
+    for tool in tools:
+        tool_name = tool["name"]
+        agent_id = f"mcp-{tool_name}"
+        mcp_agent = MCPAgent(
+            agent_id=agent_id,
+            name=f"MCP Agent - {tool_name}",
+            description=tool.get("description", f"Tool: {tool_name}"),
+            tool_name=tool_name,
+            tool_schema=tool.get("input_schema", {}),
+            mcp_client=mcp_client,
+            llm_client=llm_client,
+        )
+        registry.register(mcp_agent)
+    return tools
 
 
 @asynccontextmanager
@@ -57,19 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     try:
-        tools = await mcp_client.list_tools()
-        for tool in tools:
-            tool_name = tool["name"]
-            mcp_agent = MCPAgent(
-                agent_id=f"mcp-{tool_name}",
-                name=f"MCP Agent - {tool_name}",
-                description=tool.get("description", f"Tool: {tool_name}"),
-                tool_name=tool_name,
-                tool_schema=tool.get("input_schema", {}),
-                mcp_client=mcp_client,
-                llm_client=gemini_client,
-            )
-            registry.register(mcp_agent)
+        tools = await sync_mcp_tools(mcp_client, registry, gemini_client)
         logger.info("mcp_tools_registration_complete", count=len(tools))
     except Exception as e:
         logger.warning("mcp_tools_discovery_warning", error=str(e))

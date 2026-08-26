@@ -40,6 +40,13 @@ async def test_agents_endpoints(client: AsyncClient):
     res_404 = await client.get("/api/v1/agents/unknown-agent")
     assert res_404.status_code == 404
 
+    # Sync agents
+    res_sync = await client.post("/api/v1/agents/sync")
+    assert res_sync.status_code == 200
+    data_sync = res_sync.json()
+    assert data_sync["status"] == "ok"
+    assert data_sync["discovered_tools_count"] >= 1
+
 
 @pytest.mark.asyncio
 async def test_execute_endpoint(client: AsyncClient):

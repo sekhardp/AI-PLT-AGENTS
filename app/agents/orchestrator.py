@@ -90,6 +90,23 @@ class OrchestratorAgent(BaseAgent):
 
         return None
 
+    def _build_system_prompt(self) -> str:
+        """Dynamically construct system prompt including currently registered tools."""
+        available_agents = [
+            a for a in self.registry.list_agents() if a.agent_id != self.agent_id
+        ]
+        if not available_agents:
+            return ORCHESTRATOR_SYSTEM_PROMPT
+
+        tools_list = "\n".join(
+            f"- {a.name} (id: {a.agent_id}): {a.description}" for a in available_agents
+        )
+        return (
+            f"{ORCHESTRATOR_SYSTEM_PROMPT}\n\n"
+            f"You have access to the following specialized tools and agents:\n{tools_list}\n\n"
+            "If the user asks what tools, MCP servers, or capabilities you have, enumerate them clearly based on this list."
+        )
+
     async def execute(self, prompt: str, *, context: dict[str, Any] | None = None) -> AgentResult:
         """Route to specialized agent or execute directly using Gemini LLM."""
         delegate = await self._select_delegate_agent(prompt)
@@ -103,7 +120,7 @@ class OrchestratorAgent(BaseAgent):
         logger.info("orchestrator_direct_generation", prompt_preview=prompt[:80])
         response = await self.llm_client.generate(
             prompt=prompt,
-            system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
+            system_prompt=self._build_system_prompt(),
         )
 
         return AgentResult(
@@ -133,6 +150,6 @@ class OrchestratorAgent(BaseAgent):
         logger.info("orchestrator_direct_streaming", prompt_preview=prompt[:80])
         async for token in self.llm_client.stream(
             prompt=prompt,
-            system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
+            system_prompt=self._build_system_prompt(),
         ):
             yield token
