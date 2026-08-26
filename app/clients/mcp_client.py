@@ -6,27 +6,24 @@ import structlog
 import httpx
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 
 logger = structlog.get_logger(__name__)
 
 
-def _create_mcp_http_client(**kwargs) -> httpx.AsyncClient:
-    """Create HTTPX AsyncClient that forces HTTPS on redirects for cloud-hosted services."""
-    async def force_https_redirect_hook(request: httpx.Request) -> None:
+def _create_mcp_http_client(**kwargs) -> Any:
+    """Create MCP-compatible AsyncClient that forces HTTPS on redirects for cloud-hosted services."""
+    async def force_https_redirect_hook(request: Any) -> None:
         if request.url.scheme == "http" and request.url.host not in ("localhost", "127.0.0.1"):
             request.url = request.url.copy_with(scheme="https")
 
-    headers = kwargs.get("headers")
-    timeout = kwargs.get("timeout")
-    auth = kwargs.get("auth")
-
-    return httpx.AsyncClient(
-        headers=headers,
-        timeout=timeout if timeout is not None else httpx.Timeout(30.0, read=300.0),
-        auth=auth,
-        follow_redirects=True,
-        event_hooks={"request": [force_https_redirect_hook]},
+    client = create_mcp_http_client(
+        headers=kwargs.get("headers"),
+        timeout=kwargs.get("timeout"),
+        auth=kwargs.get("auth"),
     )
+    client.event_hooks["request"].append(force_https_redirect_hook)
+    return client
 
 
 class MCPRegistryClient:
