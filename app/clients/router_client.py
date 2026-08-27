@@ -163,6 +163,11 @@ class SmartRouterClient(BaseLLMClient):
                     "smart_router_stream_fallback_to_frontier",
                     local_error=str(e),
                 )
+                if context is not None:
+                    context["routed_to"] = "frontier"
+                    context["model"] = getattr(self.frontier_client, "model_name", "gemini-2.5-flash")
+                    context["fallback_triggered"] = True
+
                 async for token in self.frontier_client.stream(
                     prompt,
                     system_prompt=system_prompt,

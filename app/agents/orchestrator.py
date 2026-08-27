@@ -122,7 +122,7 @@ class OrchestratorAgent(BaseAgent):
             "prompt": prompt,
             "system_prompt": self._build_system_prompt(),
         }
-        if context:
+        if context is not None:
             generate_kwargs["context"] = context
             if "routing_strategy" in context:
                 generate_kwargs["strategy_override"] = context["routing_strategy"]
@@ -161,7 +161,7 @@ class OrchestratorAgent(BaseAgent):
             "prompt": prompt,
             "system_prompt": self._build_system_prompt(),
         }
-        if context:
+        if context is not None:
             stream_kwargs["context"] = context
             if "routing_strategy" in context:
                 stream_kwargs["strategy_override"] = context["routing_strategy"]

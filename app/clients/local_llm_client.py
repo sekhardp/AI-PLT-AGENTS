@@ -50,7 +50,7 @@ class LocalLLMClient(BaseLLMClient):
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             headers=self._headers,
-            timeout=httpx.Timeout(float(timeout_seconds), connect=10.0),
+            timeout=httpx.Timeout(float(timeout_seconds), connect=3.0),
         )
 
         logger.info(

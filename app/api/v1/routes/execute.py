@@ -64,17 +64,35 @@ async def execute_agent(req: ExecuteRequest, request: Request):
                 })
                 yield f"data: {init_data}\n\n"
 
+            sent_fallback_event = False
             async for token in agent.stream(req.prompt, context=context):
+                current_routed_to = context.get("routed_to", routed_to)
+                current_model = context.get("model", model_name)
+
+                if context.get("fallback_triggered") and not sent_fallback_event:
+                    sent_fallback_event = True
+                    update_data = json.dumps({
+                        "type": "routing_init",
+                        "routed_to": current_routed_to,
+                        "model": current_model,
+                        "complexity_score": complexity_score,
+                        "agent_id": agent.agent_id,
+                        "fallback_triggered": True,
+                    })
+                    yield f"data: {update_data}\n\n"
+
                 data = json.dumps({
                     "token": token,
                     "agent_id": agent.agent_id,
-                    "routed_to": routed_to,
-                    "model": model_name,
+                    "routed_to": current_routed_to,
+                    "model": current_model,
                 })
                 yield f"data: {data}\n\n"
                 await asyncio.sleep(0)
 
-            yield f"data: {json.dumps({'done': True, 'agent_id': agent.agent_id, 'routed_to': routed_to, 'model': model_name})}\n\n"
+            final_routed_to = context.get("routed_to", routed_to)
+            final_model = context.get("model", model_name)
+            yield f"data: {json.dumps({'done': True, 'agent_id': agent.agent_id, 'routed_to': final_routed_to, 'model': final_model})}\n\n"
 
         return StreamingResponse(
             event_generator(),
