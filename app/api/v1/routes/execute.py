@@ -53,33 +53,23 @@ async def execute_agent(req: ExecuteRequest, request: Request):
 
     if req.stream:
         async def event_generator():
-            # Initial routing event informing caller of model assignment in real-time
-            if routed_to:
-                init_data = json.dumps({
-                    "type": "routing_init",
-                    "routed_to": routed_to,
-                    "model": model_name,
-                    "complexity_score": complexity_score,
-                    "agent_id": agent.agent_id,
-                })
-                yield f"data: {init_data}\n\n"
-
-            sent_fallback_event = False
+            sent_init_event = False
             async for token in agent.stream(req.prompt, context=context):
                 current_routed_to = context.get("routed_to", routed_to)
                 current_model = context.get("model", model_name)
 
-                if context.get("fallback_triggered") and not sent_fallback_event:
-                    sent_fallback_event = True
-                    update_data = json.dumps({
+                # Emit verified routing event upon first token delivery
+                if not sent_init_event:
+                    sent_init_event = True
+                    init_data = json.dumps({
                         "type": "routing_init",
                         "routed_to": current_routed_to,
                         "model": current_model,
                         "complexity_score": complexity_score,
                         "agent_id": agent.agent_id,
-                        "fallback_triggered": True,
+                        "fallback_triggered": context.get("fallback_triggered", False),
                     })
-                    yield f"data: {update_data}\n\n"
+                    yield f"data: {init_data}\n\n"
 
                 data = json.dumps({
                     "token": token,
