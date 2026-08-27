@@ -45,11 +45,39 @@ class GeminiClient(BaseLLMClient):
             model_name=model_name,
         )
 
+    def _build_contents(
+        self,
+        prompt: str,
+        chat_history: list[dict[str, str]] | None = None,
+    ) -> list[types.Content] | str:
+        if not chat_history:
+            return prompt
+
+        contents: list[types.Content] = []
+        for m in chat_history:
+            role = "user" if m.get("role") == "user" else "model"
+            content_text = m.get("content", "")
+            if content_text:
+                contents.append(
+                    types.Content(
+                        role=role,
+                        parts=[types.Part.from_text(text=content_text)],
+                    )
+                )
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=prompt)],
+            )
+        )
+        return contents
+
     async def generate(
         self,
         prompt: str,
         *,
         system_prompt: str | None = None,
+        chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
@@ -66,7 +94,7 @@ class GeminiClient(BaseLLMClient):
         start = time.perf_counter()
         response = await self._client.aio.models.generate_content(
             model=self.model_name,
-            contents=prompt,
+            contents=self._build_contents(prompt, chat_history),
             config=config,
         )
         latency_ms = (time.perf_counter() - start) * 1000
@@ -102,6 +130,7 @@ class GeminiClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
+        chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncGenerator[str, None]:
@@ -117,7 +146,7 @@ class GeminiClient(BaseLLMClient):
 
         stream_response = await self._client.aio.models.generate_content_stream(
             model=self.model_name,
-            contents=prompt,
+            contents=self._build_contents(prompt, chat_history),
             config=config,
         )
 

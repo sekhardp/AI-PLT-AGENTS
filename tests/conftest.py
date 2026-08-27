@@ -28,6 +28,7 @@ class MockLLMClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
+        chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
@@ -64,6 +65,7 @@ class MockLLMClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
+        chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncGenerator[str, None]:

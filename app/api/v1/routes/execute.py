@@ -30,6 +30,8 @@ async def execute_agent(req: ExecuteRequest, request: Request):
     context = dict(req.context or {})
     if req.routing_strategy:
         context["routing_strategy"] = req.routing_strategy
+    if req.chat_history:
+        context["chat_history"] = req.chat_history
 
     ai_router = getattr(request.app.state, "router", None)
     local_client = getattr(request.app.state, "local_client", None)

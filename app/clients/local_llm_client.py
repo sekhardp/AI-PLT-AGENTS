@@ -60,10 +60,20 @@ class LocalLLMClient(BaseLLMClient):
             timeout_seconds=self.timeout_seconds,
         )
 
-    def _build_messages(self, prompt: str, system_prompt: str | None = None) -> list[dict[str, str]]:
+    def _build_messages(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        chat_history: list[dict[str, str]] | None = None,
+    ) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+        if chat_history:
+            for m in chat_history:
+                role = m.get("role", "user")
+                if role in ("user", "assistant", "system"):
+                    messages.append({"role": role, "content": m.get("content", "")})
         messages.append({"role": "user", "content": prompt})
         return messages
 
@@ -72,6 +82,7 @@ class LocalLLMClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
+        chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
@@ -81,7 +92,7 @@ class LocalLLMClient(BaseLLMClient):
 
         payload = {
             "model": self.model_name,
-            "messages": self._build_messages(prompt, system_prompt),
+            "messages": self._build_messages(prompt, system_prompt, chat_history),
             "temperature": temp,
             "max_tokens": max_tok,
             "stream": False,
@@ -135,6 +146,7 @@ class LocalLLMClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
+        chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncGenerator[str, None]:
@@ -144,7 +156,7 @@ class LocalLLMClient(BaseLLMClient):
 
         payload = {
             "model": self.model_name,
-            "messages": self._build_messages(prompt, system_prompt),
+            "messages": self._build_messages(prompt, system_prompt, chat_history),
             "temperature": temp,
             "max_tokens": max_tok,
             "stream": True,

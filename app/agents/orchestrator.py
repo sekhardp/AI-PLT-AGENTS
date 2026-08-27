@@ -126,6 +126,8 @@ class OrchestratorAgent(BaseAgent):
             generate_kwargs["context"] = context
             if "routing_strategy" in context:
                 generate_kwargs["strategy_override"] = context["routing_strategy"]
+            if "chat_history" in context:
+                generate_kwargs["chat_history"] = context["chat_history"]
 
         response = await self.llm_client.generate(**generate_kwargs)
 
@@ -165,6 +167,8 @@ class OrchestratorAgent(BaseAgent):
             stream_kwargs["context"] = context
             if "routing_strategy" in context:
                 stream_kwargs["strategy_override"] = context["routing_strategy"]
+            if "chat_history" in context:
+                stream_kwargs["chat_history"] = context["chat_history"]
 
         async for token in self.llm_client.stream(**stream_kwargs):
             yield token

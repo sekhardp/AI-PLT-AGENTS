@@ -12,6 +12,10 @@ class ExecuteRequest(BaseModel):
     )
     stream: bool = Field(False, description="Whether to stream response tokens via SSE")
     context: dict[str, Any] | None = Field(None, description="Optional context metadata")
+    chat_history: list[dict[str, str]] | None = Field(
+        None,
+        description="Prior conversation turns formatted as [{'role': 'user'|'assistant', 'content': '...'}]",
+    )
 
 
 class ExecuteResponse(BaseModel):
