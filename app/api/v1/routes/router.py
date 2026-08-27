@@ -95,7 +95,6 @@ async def update_strategy(req: UpdateStrategyRequest, request: Request):
     ai_router.default_strategy = new_strategy
     if req.complexity_threshold is not None:
         ai_router.complexity_threshold = req.complexity_threshold
-        ai_router.scorer.threshold = req.complexity_threshold
 
     return {
         "status": "ok",

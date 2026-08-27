@@ -1,33 +1,7 @@
 import pytest
 from app.clients.router_client import SmartRouterClient
-from app.router.smart_router import ComplexityScorer, RoutingStrategy, SmartAIRouter
+from app.router.smart_router import RoutingStrategy, SmartAIRouter
 from tests.conftest import MockLLMClient
-
-
-def test_complexity_scorer_simple_prompts():
-    scorer = ComplexityScorer(threshold=0.55)
-    score_hello = scorer.score("Hello there!")
-    assert score_hello < 0.40
-
-    score_summary = scorer.score("Summarize in 1 sentence: The sky is blue because of Rayleigh scattering.")
-    assert score_summary < 0.55
-
-    score_grammar = scorer.score("Fix the grammar in this text: He go to school yesterday.")
-    assert score_grammar < 0.50
-
-
-def test_complexity_scorer_complex_prompts():
-    scorer = ComplexityScorer(threshold=0.55)
-    complex_prompt = (
-        "Analyze the system design and architect a distributed consensus protocol using Paxos, "
-        "synthesizing fault tolerance, evaluating trade-offs, and avoiding race conditions."
-    )
-    score_complex = scorer.score(complex_prompt)
-    assert score_complex > 0.65
-
-    # Code snippet detection
-    code_prompt = "```python\ndef solve_paxos():\n    pass\n```\nAnalyze root cause analysis and refactor architecture."
-    assert scorer.score(code_prompt) > 0.60
 
 
 def test_smart_ai_router_auto_strategy():

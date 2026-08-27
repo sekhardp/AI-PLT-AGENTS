@@ -1,3 +1,3 @@
-from .smart_router import ComplexityScorer, RoutingDecision, RoutingStrategy, SmartAIRouter
+from .smart_router import RoutingDecision, RoutingStrategy, SmartAIRouter
 
-__all__ = ["ComplexityScorer", "RoutingDecision", "RoutingStrategy", "SmartAIRouter"]
+__all__ = ["RoutingDecision", "RoutingStrategy", "SmartAIRouter"]

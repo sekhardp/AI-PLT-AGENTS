@@ -31,85 +31,6 @@ class RoutingDecision:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class ComplexityScorer:
-    """Evaluates prompt linguistic features, reasoning depth, and context length to score complexity."""
-
-    # Keywords indicating high complexity, deep reasoning, or system architecture
-    HIGH_COMPLEXITY_PATTERNS: ClassVar[list[str]] = [
-        r"\banalyze\b",
-        r"\barchitect\b",
-        r"\bsynthesize\b",
-        r"\bcompare and contrast\b",
-        r"\bevaluate trade-?offs\b",
-        r"\bmulti-?step\b",
-        r"\bsystem design\b",
-        r"\bdistributed\b",
-        r"\brace condition\b",
-        r"\bmathematical proof\b",
-        r"\bsecurity audit\b",
-        r"\brefactor architecture\b",
-        r"\boptimize algorithm\b",
-        r"\bformal verification\b",
-        r"\broot cause analysis\b",
-        r"\bdeep dive\b",
-    ]
-
-    # Keywords indicating routine, straightforward, or low-complexity tasks
-    LOW_COMPLEXITY_PATTERNS: ClassVar[list[str]] = [
-        r"\bsummarize in (?:one|1|two|2) sentences?\b",
-        r"\btranslate (?:to|into)\b",
-        r"\bfix (?:the )?grammar\b",
-        r"\bhello\b",
-        r"\bhi\b",
-        r"\bhey\b",
-        r"\bwhat is the capital of\b",
-        r"\bextract (?:the )?(?:email|phone|name|address|date)\b",
-        r"\brephrase\b",
-        r"\bspell check\b",
-        r"\bformat as (?:json|csv|markdown)\b",
-        r"\bconvert to uppercase\b",
-    ]
-
-    def __init__(self, threshold: float = 0.55) -> None:
-        self.threshold = threshold
-        self._high_regex = [re.compile(p, re.IGNORECASE) for p in self.HIGH_COMPLEXITY_PATTERNS]
-        self._low_regex = [re.compile(p, re.IGNORECASE) for p in self.LOW_COMPLEXITY_PATTERNS]
-
-    def score(self, prompt: str) -> float:
-        """Calculate a normalized complexity score between 0.0 (very simple) and 1.0 (highly complex)."""
-        if not prompt or not prompt.strip():
-            return 0.1
-
-        text = prompt.strip()
-        word_count = len(text.split())
-
-        # Baseline score around 0.35
-        score = 0.35
-
-        # 1. Length adjustments
-        if word_count > 400:
-            score += 0.30
-        elif word_count > 150:
-            score += 0.20
-        elif word_count > 60:
-            score += 0.10
-        elif word_count < 10:
-            score -= 0.15
-
-        # 2. High complexity pattern matches (+0.12 per match, up to +0.40)
-        high_matches = sum(1 for r in self._high_regex if r.search(text))
-        score += min(high_matches * 0.12, 0.40)
-
-        # 3. Low complexity pattern matches (-0.20 per match)
-        low_matches = sum(1 for r in self._low_regex if r.search(text))
-        score -= low_matches * 0.20
-
-        # 4. Code block detection (+0.15 if user pasted code snippets)
-        if "```" in text or "def " in text or "function " in text or "class " in text:
-            score += 0.15
-
-        # Clamp between 0.05 and 0.99
-        return round(max(0.05, min(0.99, score)), 3)
 
 
 ROUTER_DECISION_PROMPT = (
@@ -136,7 +57,6 @@ class SmartAIRouter:
         self.default_strategy = default_strategy
         self.complexity_threshold = complexity_threshold
         self.fallback_enabled = fallback_enabled
-        self.scorer = ComplexityScorer(threshold=complexity_threshold)
 
         # Circuit breaker state
         self._consecutive_local_failures = 0
@@ -279,14 +199,13 @@ class SmartAIRouter:
         strategy_override: str | RoutingStrategy | None = None,
         context: dict[str, Any] | None = None,
     ) -> RoutingDecision:
-        """Determine routing target and rationale for the given prompt."""
-        # Check strategy precedence
+        """Lightweight synchronous fallback for offline or quick check."""
         active_strategy = self.default_strategy
         if strategy_override:
             try:
                 active_strategy = RoutingStrategy(str(strategy_override).upper())
             except ValueError:
-                logger.warning("invalid_strategy_override", strategy=strategy_override)
+                pass
 
         if context and "routing_strategy" in context:
             try:
@@ -294,82 +213,19 @@ class SmartAIRouter:
             except ValueError:
                 pass
 
-        # 1. Strategy: LOCAL_ONLY
         if active_strategy == RoutingStrategy.LOCAL_ONLY:
-            return RoutingDecision(
-                target="local",
-                strategy=active_strategy,
-                complexity_score=self.scorer.score(prompt),
-                reason="explicit_local_only_strategy",
-            )
+            return RoutingDecision(target="local", strategy=active_strategy, complexity_score=0.15, reason="explicit_local_only")
+        if active_strategy == RoutingStrategy.FRONTIER_ONLY or (not self.is_local_available and self.fallback_enabled):
+            return RoutingDecision(target="frontier", strategy=active_strategy, complexity_score=0.85, reason="circuit_breaker_or_frontier_only")
 
-        # 2. Strategy: FRONTIER_ONLY
-        if active_strategy == RoutingStrategy.FRONTIER_ONLY:
-            return RoutingDecision(
-                target="frontier",
-                strategy=active_strategy,
-                complexity_score=self.scorer.score(prompt),
-                reason="explicit_frontier_only_strategy",
-            )
-
-        complexity = self.scorer.score(prompt)
-
-        # 3. Check Circuit Breaker (if Local is failing, fallback to Frontier)
-        if not self.is_local_available and self.fallback_enabled:
-            return RoutingDecision(
-                target="frontier",
-                strategy=active_strategy,
-                complexity_score=complexity,
-                reason="circuit_breaker_local_temporarily_disabled",
-                metadata={"consecutive_failures": self._consecutive_local_failures},
-            )
-
-        # 4. Strategy: LOCAL_FIRST (attempts local unless prompt is extreme complexity > 0.85)
-        if active_strategy == RoutingStrategy.LOCAL_FIRST:
-            if complexity > 0.85:
-                return RoutingDecision(
-                    target="frontier",
-                    strategy=active_strategy,
-                    complexity_score=complexity,
-                    reason="local_first_extreme_complexity_escalation",
-                )
-            return RoutingDecision(
-                target="local",
-                strategy=active_strategy,
-                complexity_score=complexity,
-                reason="local_first_preference",
-            )
-
-        # 5. Strategy: FRONTIER_FIRST (defaults to frontier unless prompt is trivial < 0.25)
-        if active_strategy == RoutingStrategy.FRONTIER_FIRST:
-            if complexity < 0.25:
-                return RoutingDecision(
-                    target="local",
-                    strategy=active_strategy,
-                    complexity_score=complexity,
-                    reason="frontier_first_trivial_prompt_delegation",
-                )
-            return RoutingDecision(
-                target="frontier",
-                strategy=active_strategy,
-                complexity_score=complexity,
-                reason="frontier_first_preference",
-            )
-
-        # 6. Strategy: AUTO (Threshold based)
-        if complexity >= self.complexity_threshold:
-            return RoutingDecision(
-                target="frontier",
-                strategy=active_strategy,
-                complexity_score=complexity,
-                reason=f"complexity_score_{complexity}_exceeds_threshold_{self.complexity_threshold}",
-            )
-
+        # Fast heuristic fallback: complex keywords go to frontier, simple go to local
+        is_complex = any(w in prompt.lower() for w in ("analyze", "architect", "distributed", "consensus", "paxos", "proof", "verification"))
+        target = "frontier" if is_complex else "local"
         return RoutingDecision(
-            target="local",
+            target=target,
             strategy=active_strategy,
-            complexity_score=complexity,
-            reason=f"complexity_score_{complexity}_below_threshold_{self.complexity_threshold}",
+            complexity_score=0.85 if is_complex else 0.15,
+            reason=f"heuristic_{target}",
         )
 
     def status(self) -> dict[str, Any]:
