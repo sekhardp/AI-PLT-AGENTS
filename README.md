@@ -6,10 +6,13 @@ Production-grade agent execution and Model Context Protocol (MCP) orchestration 
 
 ## Features
 
-- **Google Gemini 2.5 Flash on Vertex AI**: Direct integration using the modern `google-genai` SDK with streaming and async generation.
+- **Google Gemini 2.5 Flash on Vertex AI**: Direct integration using the modern `google-genai` SDK with streaming and async generation (Frontier Model).
+- **Self-Hosted Local LLM (vLLM)**: High-throughput OpenAI-compatible inference on a dedicated GCP Compute Engine GPU instance (`g2-standard-4` with NVIDIA L4).
+- **Smart AI Router**: Intelligently analyzes prompt complexity, length, and task intent to dynamically route requests between Local LLM and Frontier Gemini.
+- **Resilient Circuit Breaker & Zero Downtime Failover**: Automatically escalates to Frontier Gemini if the local instance is offline or errors.
 - **Dynamic MCP Tool Orchestration**: Automatic tool discovery and execution via the MCP Registry Gateway SSE interface.
 - **Master Orchestrator Agent**: Intelligent intent classification, tool routing, and answer synthesis.
-- **Production Architecture**: Layered architecture (`core`, `clients`, `agents`, `api/v1`) matching `AI-PLT-BE`.
+- **Production Architecture**: Layered architecture (`core`, `clients`, `agents`, `router`, `api/v1`) matching `AI-PLT-BE`.
 - **Cloud Run Deployment**: Ready-to-deploy multi-stage `Dockerfile` and `cloudbuild.yaml` with Google Artifact Registry integration.
 
 ---
@@ -39,10 +42,19 @@ just run
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` / `/api/v1/health` | Service and registered agents health check |
+| `GET` | `/health` / `/api/v1/health` | Service, agents, router, and model health check |
 | `GET` | `/agents` / `/api/v1/agents` | List all registered agents and capabilities |
 | `GET` | `/agents/{id}` / `/api/v1/agents/{id}` | Retrieve specific agent metadata |
-| `POST` | `/execute` / `/api/v1/execute` | Execute agent prompt (synchronous or SSE streaming) |
+| `POST` | `/execute` / `/api/v1/execute` | Execute agent prompt with Smart Routing (or explicit strategy override) |
+| `GET` | `/api/v1/router/status` | Real-time router status, circuit breaker, and model liveness |
+| `POST` | `/api/v1/router/classify` | Preview complexity score and predicted route without executing LLM |
+| `POST` | `/api/v1/router/strategy` | Dynamically update active routing strategy or complexity threshold |
+
+---
+
+## Dedicated vLLM Service (`ai-plt-local-llm`)
+
+For hosting the local LLM on Google Compute Engine or GPU instances, see the standalone repository [`ai-plt-local-llm`](../ai-plt-local-llm).
 
 ---
 

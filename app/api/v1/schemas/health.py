@@ -1,4 +1,5 @@
 from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -13,3 +14,5 @@ class HealthResponse(BaseModel):
     service: str = Field("ai-plt-agents", description="Service name")
     agents: dict[str, Any] = Field(default_factory=dict, description="Aggregate health of all agents")
     mcp_gateway: dict[str, Any] = Field(default_factory=dict, description="MCP Registry Gateway connection info")
+    router: dict[str, Any] = Field(default_factory=dict, description="Smart AI Router state and statistics")
+    models: dict[str, Any] = Field(default_factory=dict, description="Health of configured LLM providers (Frontier, Local)")

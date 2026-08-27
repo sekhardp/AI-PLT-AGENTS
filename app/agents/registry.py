@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import structlog
+
 from app.agents.base import BaseAgent
 
 logger = structlog.get_logger(__name__)

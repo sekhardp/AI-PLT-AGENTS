@@ -1,4 +1,3 @@
-import json
 import pytest
 from httpx import AsyncClient
 
@@ -50,14 +49,16 @@ async def test_agents_endpoints(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_execute_endpoint(client: AsyncClient):
-    # Synchronous execution
-    payload = {"prompt": "Hello AI platform"}
+    # Synchronous execution with strategy override
+    payload = {"prompt": "Hello AI platform", "routing_strategy": "LOCAL_ONLY"}
     res = await client.post("/api/v1/execute", json=payload)
     assert res.status_code == 200
     data = res.json()
     assert data["agent_id"] == "orchestrator-01"
     assert len(data["content"]) > 0
     assert "trace_id" in data
+    assert data["metadata"]["routed_to"] == "local"
+    assert data["metadata"]["routing_strategy"] == "LOCAL_ONLY"
 
 
 @pytest.mark.asyncio
@@ -69,3 +70,33 @@ async def test_execute_streaming_endpoint(client: AsyncClient):
     text = res.text
     assert "data: " in text
     assert '"done": true' in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_endpoints(client: AsyncClient):
+    # 1. Router status
+    res_status = await client.get("/api/v1/router/status")
+    assert res_status.status_code == 200
+    data_status = res_status.json()
+    assert data_status["status"] == "ok"
+    assert "router" in data_status
+    assert "default_strategy" in data_status["router"]
+
+    # 2. Router classify
+    classify_payload = {
+        "prompt": "Analyze race conditions in distributed systems and write a formal verification mathematical proof."
+    }
+    res_classify = await client.post("/api/v1/router/classify", json=classify_payload)
+    assert res_classify.status_code == 200
+    data_classify = res_classify.json()
+    assert data_classify["target"] == "frontier"
+    assert data_classify["complexity_score"] >= 0.55
+
+    # 3. Router update strategy
+    strategy_payload = {"strategy": "LOCAL_FIRST", "complexity_threshold": 0.70}
+    res_strategy = await client.post("/api/v1/router/strategy", json=strategy_payload)
+    assert res_strategy.status_code == 200
+    data_strat = res_strategy.json()
+    assert data_strat["updated_strategy"] == "LOCAL_FIRST"
+    assert data_strat["updated_threshold"] == 0.70
+

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+
 import structlog
-import httpx
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from mcp.shared._httpx_utils import create_mcp_http_client

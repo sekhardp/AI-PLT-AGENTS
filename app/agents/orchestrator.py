@@ -116,30 +116,39 @@ class OrchestratorAgent(BaseAgent):
             result.metadata["routed_by"] = self.agent_id
             return result
 
-        # Direct Orchestrator Gemini execution
+        # Direct Orchestrator execution (via Smart Router or LLM client)
         logger.info("orchestrator_direct_generation", prompt_preview=prompt[:80])
-        response = await self.llm_client.generate(
-            prompt=prompt,
-            system_prompt=self._build_system_prompt(),
-        )
+        generate_kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "system_prompt": self._build_system_prompt(),
+        }
+        if context:
+            generate_kwargs["context"] = context
+            if "routing_strategy" in context:
+                generate_kwargs["strategy_override"] = context["routing_strategy"]
+
+        response = await self.llm_client.generate(**generate_kwargs)
+
+        exec_metadata = {
+            "provider": response.provider,
+            "model": response.model,
+            "usage": response.usage,
+            "latency_ms": response.latency_ms,
+            "routed_to": response.metadata.get("routed_to"),
+        }
+        exec_metadata.update(response.metadata)
 
         return AgentResult(
             content=response.content,
             agent_id=self.agent_id,
             agent_name=self.name,
-            metadata={
-                "provider": self.llm_client.provider_name,
-                "model": response.model,
-                "usage": response.usage,
-                "latency_ms": response.latency_ms,
-                "routed_to": None,
-            },
+            metadata=exec_metadata,
         )
 
     async def stream(
         self, prompt: str, *, context: dict[str, Any] | None = None
     ) -> AsyncGenerator[str, None]:
-        """Route and stream from delegate agent or stream directly from Gemini LLM."""
+        """Route and stream from delegate agent or stream directly from Smart Router LLM."""
         delegate = await self._select_delegate_agent(prompt)
 
         if delegate:
@@ -148,8 +157,14 @@ class OrchestratorAgent(BaseAgent):
             return
 
         logger.info("orchestrator_direct_streaming", prompt_preview=prompt[:80])
-        async for token in self.llm_client.stream(
-            prompt=prompt,
-            system_prompt=self._build_system_prompt(),
-        ):
+        stream_kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "system_prompt": self._build_system_prompt(),
+        }
+        if context:
+            stream_kwargs["context"] = context
+            if "routing_strategy" in context:
+                stream_kwargs["strategy_override"] = context["routing_strategy"]
+
+        async for token in self.llm_client.stream(**stream_kwargs):
             yield token

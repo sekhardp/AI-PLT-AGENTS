@@ -6,16 +6,18 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.distribution import APP_DISTRIBUTION, APP_VERSION
+from app.agents.mcp import MCPAgent
+from app.agents.orchestrator import OrchestratorAgent
+from app.agents.registry import AgentRegistry
+from app.api.router import root_router
+from app.clients.gemini_client import GeminiClient
+from app.clients.local_llm_client import LocalLLMClient
+from app.clients.mcp_client import MCPRegistryClient
+from app.clients.router_client import SmartRouterClient
 from app.core.error import register_error_handlers
 from app.core.logging import setup_logging
 from app.core.settings import app_settings
-from app.api.router import root_router
-from app.clients.gemini_client import GeminiClient
-from app.clients.mcp_client import MCPRegistryClient
-from app.agents.registry import AgentRegistry
-from app.agents.orchestrator import OrchestratorAgent
-from app.agents.mcp import MCPAgent
+from app.router.smart_router import RoutingStrategy, SmartAIRouter
 
 logger = structlog.get_logger(__name__)
 
@@ -23,7 +25,7 @@ logger = structlog.get_logger(__name__)
 async def sync_mcp_tools(
     mcp_client: MCPRegistryClient,
     registry: AgentRegistry,
-    llm_client: GeminiClient,
+    llm_client: GeminiClient | SmartRouterClient,
 ) -> list[dict[str, Any]]:
     """Discover tools from MCP Registry Gateway and dynamically register MCPAgents."""
     tools = await mcp_client.list_tools()
@@ -54,11 +56,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         env=app_settings.ENV,
         gcp_project=app_settings.vertex_settings.GCP_PROJECT_ID,
         gcp_location=app_settings.vertex_settings.GCP_LOCATION,
-        model=app_settings.vertex_settings.GEMINI_MODEL,
+        gemini_model=app_settings.vertex_settings.GEMINI_MODEL,
+        local_llm_url=app_settings.local_llm_settings.BASE_URL,
+        local_llm_model=app_settings.local_llm_settings.MODEL,
+        router_strategy=app_settings.router_settings.DEFAULT_STRATEGY,
         mcp_registry_url=app_settings.mcp_settings.REGISTRY_URL,
     )
 
-    # Initialize Gemini LLM Client
+    # 1. Initialize Frontier Gemini Client
     gemini_client = GeminiClient(
         project_id=app_settings.vertex_settings.GCP_PROJECT_ID,
         location=app_settings.vertex_settings.GCP_LOCATION,
@@ -67,27 +72,59 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         default_max_tokens=app_settings.vertex_settings.GEMINI_MAX_TOKENS,
     )
 
-    # Initialize Agent Registry
+    # 2. Initialize Local LLM Client (vLLM / Compute Engine instance)
+    local_client = LocalLLMClient(
+        base_url=app_settings.local_llm_settings.BASE_URL,
+        model_name=app_settings.local_llm_settings.MODEL,
+        api_key=app_settings.local_llm_settings.API_KEY,
+        timeout_seconds=app_settings.local_llm_settings.TIMEOUT_SECONDS,
+        default_temperature=app_settings.local_llm_settings.TEMPERATURE,
+        default_max_tokens=app_settings.local_llm_settings.MAX_TOKENS,
+    )
+
+    # 3. Initialize Smart AI Router
+    try:
+        strategy = RoutingStrategy(app_settings.router_settings.DEFAULT_STRATEGY.upper())
+    except ValueError:
+        strategy = RoutingStrategy.AUTO
+
+    router = SmartAIRouter(
+        default_strategy=strategy,
+        complexity_threshold=app_settings.router_settings.COMPLEXITY_THRESHOLD,
+        fallback_enabled=app_settings.router_settings.FALLBACK_ENABLED,
+    )
+
+    # 4. Initialize Unified Smart Router Client
+    router_client = SmartRouterClient(
+        frontier_client=gemini_client,
+        local_client=local_client,
+        router=router,
+    )
+
+    # 5. Initialize Agent Registry
     registry = AgentRegistry()
 
-    # Initialize and Register Master Orchestrator Agent
-    orchestrator = OrchestratorAgent(registry=registry, llm_client=gemini_client)
+    # 6. Initialize Master Orchestrator Agent powered by Smart Router
+    orchestrator = OrchestratorAgent(registry=registry, llm_client=router_client)
     registry.register(orchestrator)
 
-    # Initialize MCP Registry Client and discover tools
+    # 7. Initialize MCP Registry Client and discover tools
     mcp_client = MCPRegistryClient(
         registry_url=app_settings.mcp_settings.REGISTRY_URL,
         timeout_seconds=app_settings.mcp_settings.TIMEOUT_SECONDS,
     )
 
     try:
-        tools = await sync_mcp_tools(mcp_client, registry, gemini_client)
+        tools = await sync_mcp_tools(mcp_client, registry, router_client)
         logger.info("mcp_tools_registration_complete", count=len(tools))
     except Exception as e:
         logger.warning("mcp_tools_discovery_warning", error=str(e))
 
     # Attach shared instances to FastAPI application state
     app.state.gemini_client = gemini_client
+    app.state.local_client = local_client
+    app.state.router = router
+    app.state.router_client = router_client
     app.state.mcp_client = mcp_client
     app.state.registry = registry
     app.state.orchestrator = orchestrator
@@ -97,6 +134,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info("agent_service_shutting_down")
+    await local_client.aclose()
 
 
 def create_app() -> FastAPI:

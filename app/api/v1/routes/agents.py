@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
-from app.api.v1.schemas.agents import AgentInfo, AgentListResponse
+
 from app.agents.registry import AgentRegistry
+from app.api.v1.schemas.agents import AgentInfo, AgentListResponse
 
 router = APIRouter()
 

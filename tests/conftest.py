@@ -3,22 +3,22 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncGenerator
 from typing import Any
-import pytest
-from httpx import ASGITransport, AsyncClient
 
-from app.agents.base import BaseAgent, AgentResult
-from app.agents.registry import AgentRegistry
-from app.agents.orchestrator import OrchestratorAgent
+import pytest
 from app.agents.mcp import MCPAgent
+from app.agents.orchestrator import OrchestratorAgent
+from app.agents.registry import AgentRegistry
 from app.clients.base import BaseLLMClient, LLMResponse
 from app.clients.mcp_client import MCPRegistryClient
 from app.core.bootstrap import create_app
+from httpx import ASGITransport, AsyncClient
 
 
 class MockLLMClient(BaseLLMClient):
     """Deterministic mock LLM client for fast, reliable unit testing."""
 
     provider_name = "mock-gemini"
+    model_name = "mock-model"
 
     def __init__(self, fixed_response: str = "Mocked LLM Answer") -> None:
         self.fixed_response = fixed_response
@@ -64,6 +64,9 @@ class MockLLMClient(BaseLLMClient):
 
     def health(self) -> dict[str, Any]:
         return {"provider": self.provider_name, "status": "healthy"}
+
+    async def check_liveness(self) -> dict[str, Any]:
+        return {"provider": self.provider_name, "status": "healthy", "latency_ms": 1.0}
 
 
 class MockMCPRegistryClient(MCPRegistryClient):
@@ -131,9 +134,18 @@ def mcp_agent(mock_mcp_client: MockMCPRegistryClient, mock_llm: MockLLMClient) -
 
 @pytest.fixture
 async def test_app(mock_llm: MockLLMClient, mock_mcp_client: MockMCPRegistryClient):
+    from app.clients.router_client import SmartRouterClient
+    from app.router.smart_router import RoutingStrategy, SmartAIRouter
+
     app = create_app()
     registry = AgentRegistry()
-    orchestrator = OrchestratorAgent(registry=registry, llm_client=mock_llm)
+
+    router = SmartAIRouter(default_strategy=RoutingStrategy.AUTO, complexity_threshold=0.55)
+    local_client = MockLLMClient(fixed_response="Mocked Local Answer")
+    local_client.provider_name = "mock-local"
+    router_client = SmartRouterClient(frontier_client=mock_llm, local_client=local_client, router=router)
+
+    orchestrator = OrchestratorAgent(registry=registry, llm_client=router_client)
     registry.register(orchestrator)
 
     mcp_agent = MCPAgent(
@@ -143,11 +155,14 @@ async def test_app(mock_llm: MockLLMClient, mock_mcp_client: MockMCPRegistryClie
         tool_name="get_weather",
         tool_schema={},
         mcp_client=mock_mcp_client,
-        llm_client=mock_llm,
+        llm_client=router_client,
     )
     registry.register(mcp_agent)
 
     app.state.gemini_client = mock_llm
+    app.state.local_client = local_client
+    app.state.router = router
+    app.state.router_client = router_client
     app.state.mcp_client = mock_mcp_client
     app.state.registry = registry
     app.state.orchestrator = orchestrator

@@ -1,4 +1,10 @@
-from app.core.settings import AppSettings, LoggingSettings, EndpointSettings, VertexAISettings, MCPSettings
+from app.core.settings import (
+    AppSettings,
+    EndpointSettings,
+    LocalLLMSettings,
+    RouterSettings,
+    VertexAISettings,
+)
 
 
 def test_settings_initialization():
@@ -8,6 +14,8 @@ def test_settings_initialization():
     assert settings.endpoint_settings.PORT == 8002
     assert settings.vertex_settings.GEMINI_MODEL == "gemini-2.5-flash"
     assert settings.mcp_settings.REGISTRY_URL == "http://localhost:8081/sse"
+    assert settings.local_llm_settings.MODEL == "Qwen/Qwen2.5-7B-Instruct"
+    assert settings.router_settings.DEFAULT_STRATEGY == "AUTO"
 
 
 def test_custom_endpoint_settings():
@@ -24,3 +32,23 @@ def test_vertex_settings():
     )
     assert vertex.GCP_PROJECT_ID == "test-project"
     assert vertex.GEMINI_MODEL == "gemini-2.0-flash"
+
+
+def test_local_llm_and_router_settings():
+    local_cfg = LocalLLMSettings(
+        BASE_URL="http://10.128.0.5:8000/v1",
+        MODEL="meta-llama/Meta-Llama-3.1-8B-Instruct",
+        TIMEOUT_SECONDS=120,
+    )
+    assert local_cfg.BASE_URL == "http://10.128.0.5:8000/v1"
+    assert local_cfg.MODEL == "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    assert local_cfg.TIMEOUT_SECONDS == 120
+
+    router_cfg = RouterSettings(
+        DEFAULT_STRATEGY="LOCAL_FIRST",
+        COMPLEXITY_THRESHOLD=0.65,
+        FALLBACK_ENABLED=True,
+    )
+    assert router_cfg.DEFAULT_STRATEGY == "LOCAL_FIRST"
+    assert router_cfg.COMPLEXITY_THRESHOLD == 0.65
+    assert router_cfg.FALLBACK_ENABLED is True

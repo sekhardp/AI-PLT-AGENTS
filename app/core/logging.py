@@ -1,6 +1,8 @@
 import logging
 import sys
+
 import structlog
+
 from app.core.settings import app_settings
 
 

@@ -1,5 +1,5 @@
+from app.agents.base import AgentResult, BaseAgent
 from app.agents.registry import AgentRegistry
-from app.agents.base import BaseAgent, AgentResult
 
 
 class DummyAgent(BaseAgent):

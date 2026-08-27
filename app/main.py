@@ -1,5 +1,6 @@
 import uvicorn
 from fastapi import FastAPI
+
 from app.core.bootstrap import bootstrap
 from app.core.settings import app_settings
 

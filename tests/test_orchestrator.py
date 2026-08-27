@@ -1,7 +1,7 @@
 import pytest
+from app.agents.mcp import MCPAgent
 from app.agents.orchestrator import OrchestratorAgent
 from app.agents.registry import AgentRegistry
-from app.agents.mcp import MCPAgent
 
 
 @pytest.mark.asyncio
