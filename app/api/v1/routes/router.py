@@ -63,7 +63,10 @@ async def classify_prompt(req: ClassifyRequest, request: Request) -> ClassifyRes
     if not ai_router:
         raise HTTPException(status_code=503, detail="Router is not initialized")
 
-    decision = ai_router.classify(req.prompt, strategy_override=req.routing_strategy)
+    if hasattr(ai_router, "decide"):
+        decision = await ai_router.decide(req.prompt, strategy_override=req.routing_strategy)
+    else:
+        decision = ai_router.classify(req.prompt, strategy_override=req.routing_strategy)
     return ClassifyResponse(
         target=decision.target,
         strategy=decision.strategy.value,

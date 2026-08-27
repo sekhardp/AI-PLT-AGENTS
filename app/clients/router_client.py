@@ -26,6 +26,8 @@ class SmartRouterClient(BaseLLMClient):
         self.frontier_client = frontier_client
         self.local_client = local_client
         self.router = router
+        if getattr(self.router, "local_client", None) is None:
+            self.router.local_client = self.local_client
 
     def classify(
         self,
@@ -48,7 +50,10 @@ class SmartRouterClient(BaseLLMClient):
         context: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Dynamically routes generate request to Local LLM or Frontier Gemini with automatic fallback."""
-        decision = self.router.classify(prompt, strategy_override=strategy_override, context=context)
+        if hasattr(self.router, "decide"):
+            decision = await self.router.decide(prompt, strategy_override=strategy_override, context=context)
+        else:
+            decision = self.router.classify(prompt, strategy_override=strategy_override, context=context)
         logger.info(
             "smart_router_decision",
             target=decision.target,
@@ -118,7 +123,7 @@ class SmartRouterClient(BaseLLMClient):
                 "routing_strategy": decision.strategy.value,
                 "complexity_score": decision.complexity_score,
                 "routing_reason": decision.reason,
-                "fallback_triggered": False,
+                "fallback_triggered": decision.metadata.get("fallback_triggered", False),
             }
         )
         return response
@@ -134,7 +139,22 @@ class SmartRouterClient(BaseLLMClient):
         context: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream completion tokens dynamically from Local LLM or Frontier Gemini."""
-        decision = self.router.classify(prompt, strategy_override=strategy_override, context=context)
+        if hasattr(self.router, "decide"):
+            decision = await self.router.decide(prompt, strategy_override=strategy_override, context=context)
+        else:
+            decision = self.router.classify(prompt, strategy_override=strategy_override, context=context)
+
+        chosen_model = (
+            getattr(self.local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct")
+            if decision.target == "local"
+            else getattr(self.frontier_client, "model_name", "gemini-2.5-flash")
+        )
+        if context is not None:
+            context["routed_to"] = decision.target
+            context["model"] = chosen_model
+            context["routing_reason"] = decision.reason
+            context["fallback_triggered"] = decision.metadata.get("fallback_triggered", False)
+
         logger.info(
             "smart_router_stream_decision",
             target=decision.target,

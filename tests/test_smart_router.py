@@ -132,3 +132,36 @@ async def test_smart_router_client_fallback():
     async for t in client.stream("Hello again!"):
         tokens.append(t)
     assert len(tokens) > 0
+
+
+@pytest.mark.asyncio
+async def test_smart_router_llm_decide():
+    # 1. Local LLM classifies as simple -> target: local
+    local_classifier = MockLLMClient(fixed_response='{"target": "local", "reason": "simple greeting"}')
+    router = SmartAIRouter(local_client=local_classifier)
+    decision = await router.decide("Hello!")
+    assert decision.target == "local"
+    assert decision.reason == "simple greeting"
+
+    # 2. Local LLM classifies as complex -> target: frontier
+    local_classifier.fixed_response = '{"target": "frontier", "reason": "deep reasoning required"}'
+    decision_frontier = await router.decide("Architect distributed consensus system")
+    assert decision_frontier.target == "frontier"
+    assert decision_frontier.reason == "deep reasoning required"
+
+
+@pytest.mark.asyncio
+async def test_smart_router_llm_decide_unreachable_fallback():
+    class OfflineLocalClient(MockLLMClient):
+        async def generate(self, *args, **kwargs):
+            raise ConnectionError("Compute Engine VM is stopped (connect timed out)")
+
+    offline_client = OfflineLocalClient()
+    router = SmartAIRouter(local_client=offline_client, fallback_enabled=True)
+
+    # Local is down -> immediately and gracefully falls back to frontier!
+    decision = await router.decide("What is the weather today?")
+    assert decision.target == "frontier"
+    assert "local_unreachable_fallback" in decision.reason
+    assert decision.metadata["fallback_triggered"] is True
+

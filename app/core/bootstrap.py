@@ -89,6 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         strategy = RoutingStrategy.AUTO
 
     router = SmartAIRouter(
+        local_client=local_client,
         default_strategy=strategy,
         complexity_threshold=app_settings.router_settings.COMPLEXITY_THRESHOLD,
         fallback_enabled=app_settings.router_settings.FALLBACK_ENABLED,

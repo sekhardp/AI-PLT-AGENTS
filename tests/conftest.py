@@ -39,6 +39,15 @@ class MockLLMClient(BaseLLMClient):
                 content = json.dumps({"selected_agent_id": "mcp-get_weather", "reason": "weather_query"})
             else:
                 content = json.dumps({"selected_agent_id": None, "reason": "general_query"})
+        elif system_prompt and "intelligent ai router" in system_prompt.lower():
+            if self.fixed_response.strip().startswith("{"):
+                content = self.fixed_response
+            elif any(w in prompt.lower() for w in ("complex", "consensus", "proof", "architect", "distributed", "race")):
+                content = json.dumps({"target": "frontier", "reason": "complex reasoning required"})
+            else:
+                content = json.dumps({"target": "local", "reason": "simple query"})
+        elif self.fixed_response.strip().startswith("{"):
+            content = self.fixed_response
         else:
             content = f"{self.fixed_response} to: {prompt[:40]}"
 

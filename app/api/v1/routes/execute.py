@@ -53,23 +53,33 @@ async def execute_agent(req: ExecuteRequest, request: Request):
 
     if req.stream:
         async def event_generator():
-            sent_init_event = False
-            async for token in agent.stream(req.prompt, context=context):
-                current_routed_to = context.get("routed_to", routed_to)
-                current_model = context.get("model", model_name)
+            # 1. Immediately inform client that AI Router is actively evaluating the query
+            init_eval_data = json.dumps({
+                "type": "routing_init",
+                "stage": "ai_router",
+                "routed_to": "ai_router",
+                "model": "AI Router",
+                "agent_id": agent.agent_id,
+            })
+            yield f"data: {init_eval_data}\n\n"
 
-                # Emit verified routing event upon first token delivery
-                if not sent_init_event:
-                    sent_init_event = True
-                    init_data = json.dumps({
-                        "type": "routing_init",
+            sent_decision_event = False
+            async for token in agent.stream(req.prompt, context=context):
+                current_routed_to = context.get("routed_to", routed_to or "local")
+                current_model = context.get("model", model_name or "Qwen/Qwen2.5-7B-Instruct")
+
+                # 2. As soon as routing decision is resolved and first token arrives, update tag
+                if not sent_decision_event:
+                    sent_decision_event = True
+                    decision_data = json.dumps({
+                        "type": "routing_decision",
+                        "stage": "executing",
                         "routed_to": current_routed_to,
                         "model": current_model,
-                        "complexity_score": complexity_score,
                         "agent_id": agent.agent_id,
                         "fallback_triggered": context.get("fallback_triggered", False),
                     })
-                    yield f"data: {init_data}\n\n"
+                    yield f"data: {decision_data}\n\n"
 
                 data = json.dumps({
                     "token": token,
@@ -80,8 +90,8 @@ async def execute_agent(req: ExecuteRequest, request: Request):
                 yield f"data: {data}\n\n"
                 await asyncio.sleep(0)
 
-            final_routed_to = context.get("routed_to", routed_to)
-            final_model = context.get("model", model_name)
+            final_routed_to = context.get("routed_to", routed_to or "frontier")
+            final_model = context.get("model", model_name or "gemini-2.5-flash")
             yield f"data: {json.dumps({'done': True, 'agent_id': agent.agent_id, 'routed_to': final_routed_to, 'model': final_model})}\n\n"
 
         return StreamingResponse(
