@@ -133,8 +133,9 @@ class GeminiClient(BaseLLMClient):
         chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        context: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream tokens asynchronously from Gemini on Vertex AI."""
+        """Stream tokens asynchronously from Gemini on Vertex AI and capture exact model usage."""
         temp = temperature if temperature is not None else self.default_temperature
         max_tok = max_tokens if max_tokens is not None else self.default_max_tokens
 
@@ -151,6 +152,13 @@ class GeminiClient(BaseLLMClient):
         )
 
         async for chunk in stream_response:
+            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata and context is not None:
+                um = chunk.usage_metadata
+                context["usage"] = {
+                    "prompt_tokens": getattr(um, "prompt_token_count", 0) or 0,
+                    "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
+                    "total_tokens": getattr(um, "total_token_count", 0) or 0,
+                }
             if chunk.text:
                 yield chunk.text
 

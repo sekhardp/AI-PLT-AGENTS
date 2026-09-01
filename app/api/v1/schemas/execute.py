@@ -42,3 +42,4 @@ class StreamChunk(BaseModel):
     model: str | None = None
     complexity_score: float | None = None
     type: str | None = None
+    usage: dict[str, Any] | None = None

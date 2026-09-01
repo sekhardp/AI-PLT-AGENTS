@@ -32,6 +32,8 @@ class BaseLLMClient(ABC):
         chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         """Generate a complete completion asynchronously."""
         ...
@@ -45,6 +47,8 @@ class BaseLLMClient(ABC):
         chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
         """Stream completion tokens asynchronously."""
         ...

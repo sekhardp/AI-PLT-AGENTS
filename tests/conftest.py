@@ -31,6 +31,8 @@ class MockLLMClient(BaseLLMClient):
         chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         # Check if the prompt was for tool argument extraction
         if system_prompt and "parameter extractor" in system_prompt.lower():
@@ -68,7 +70,11 @@ class MockLLMClient(BaseLLMClient):
         chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
+        if context is not None:
+            context["usage"] = {"prompt_tokens": 10, "completion_tokens": 15, "total_tokens": 25}
         tokens = ["This ", "is ", "a ", "streamed ", "mock ", "response."]
         for token in tokens:
             yield token

@@ -178,6 +178,7 @@ class SmartRouterClient(BaseLLMClient):
                     chat_history=history,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    context=context,
                 ):
                     yield token
                 self.router.record_local_success()
@@ -202,6 +203,7 @@ class SmartRouterClient(BaseLLMClient):
                     chat_history=history,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    context=context,
                 ):
                     yield token
                 return
@@ -213,6 +215,7 @@ class SmartRouterClient(BaseLLMClient):
             chat_history=history,
             temperature=temperature,
             max_tokens=max_tokens,
+            context=context,
         ):
             yield token
 

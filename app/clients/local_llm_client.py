@@ -149,8 +149,9 @@ class LocalLLMClient(BaseLLMClient):
         chat_history: list[dict[str, str]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        context: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream tokens asynchronously from local LLM instance via Server-Sent Events."""
+        """Stream tokens asynchronously from local LLM instance and capture usage metadata."""
         temp = temperature if temperature is not None else self.default_temperature
         max_tok = max_tokens if max_tokens is not None else self.default_max_tokens
 
@@ -160,6 +161,7 @@ class LocalLLMClient(BaseLLMClient):
             "temperature": temp,
             "max_tokens": max_tok,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
 
         try:
@@ -174,6 +176,13 @@ class LocalLLMClient(BaseLLMClient):
                         break
                     try:
                         chunk = json.loads(data_str)
+                        if "usage" in chunk and chunk["usage"] and context is not None:
+                            raw_u = chunk["usage"]
+                            context["usage"] = {
+                                "prompt_tokens": raw_u.get("prompt_tokens", 0),
+                                "completion_tokens": raw_u.get("completion_tokens", 0),
+                                "total_tokens": raw_u.get("total_tokens", 0),
+                            }
                         choices = chunk.get("choices", [])
                         if choices:
                             delta = choices[0].get("delta", {})
