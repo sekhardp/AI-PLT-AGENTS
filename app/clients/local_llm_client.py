@@ -119,10 +119,14 @@ class LocalLLMClient(BaseLLMClient):
         content = choices[0].get("message", {}).get("content", "") if choices else ""
 
         raw_usage = data.get("usage", {})
+        p_tok = int(raw_usage.get("prompt_tokens", 0) or 0)
+        c_tok = int(raw_usage.get("completion_tokens", 0) or 0)
+        t_tok = int(raw_usage.get("total_tokens", 0) or (p_tok + c_tok))
+
         usage = {
-            "prompt_tokens": raw_usage.get("prompt_tokens", 0),
-            "completion_tokens": raw_usage.get("completion_tokens", 0),
-            "total_tokens": raw_usage.get("total_tokens", 0),
+            "prompt_tokens": p_tok,
+            "completion_tokens": c_tok,
+            "total_tokens": t_tok,
         }
 
         logger.info(
@@ -178,10 +182,13 @@ class LocalLLMClient(BaseLLMClient):
                         chunk = json.loads(data_str)
                         if "usage" in chunk and chunk["usage"] and context is not None:
                             raw_u = chunk["usage"]
+                            p_tok = int(raw_u.get("prompt_tokens", 0) or 0)
+                            c_tok = int(raw_u.get("completion_tokens", 0) or 0)
+                            t_tok = int(raw_u.get("total_tokens", 0) or (p_tok + c_tok))
                             context["usage"] = {
-                                "prompt_tokens": raw_u.get("prompt_tokens", 0),
-                                "completion_tokens": raw_u.get("completion_tokens", 0),
-                                "total_tokens": raw_u.get("total_tokens", 0),
+                                "prompt_tokens": p_tok,
+                                "completion_tokens": c_tok,
+                                "total_tokens": t_tok,
                             }
                         choices = chunk.get("choices", [])
                         if choices:

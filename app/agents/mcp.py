@@ -139,5 +139,6 @@ class MCPAgent(BaseAgent):
             prompt=synthesis_prompt,
             system_prompt="You are an expert AI assistant summarizing tool results.",
             temperature=0.7,
+            context=context,
         ):
             yield token

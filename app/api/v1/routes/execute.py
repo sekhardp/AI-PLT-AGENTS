@@ -66,7 +66,11 @@ async def execute_agent(req: ExecuteRequest, request: Request):
             yield f"data: {init_eval_data}\n\n"
 
             sent_decision_event = False
+            token_count = 0
+            accumulated_response: list[str] = []
             async for token in agent.stream(req.prompt, context=context):
+                token_count += 1
+                accumulated_response.append(token)
                 current_routed_to = context.get("routed_to", routed_to or "local")
                 current_model = context.get("model", model_name or "Qwen/Qwen2.5-7B-Instruct")
 
@@ -94,7 +98,27 @@ async def execute_agent(req: ExecuteRequest, request: Request):
 
             final_routed_to = context.get("routed_to", routed_to or "frontier")
             final_model = context.get("model", model_name or "gemini-2.5-flash")
-            yield f"data: {json.dumps({'done': True, 'agent_id': agent.agent_id, 'routed_to': final_routed_to, 'model': final_model})}\n\n"
+
+            usage = context.get("usage") or {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
+            total_tokens = usage.get("total_tokens", 0)
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+
+            done_payload = {
+                "done": True,
+                "agent_id": agent.agent_id,
+                "routed_to": final_routed_to,
+                "model": final_model,
+                "usage": usage,
+                "total_tokens": total_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            }
+            yield f"data: {json.dumps(done_payload)}\n\n"
 
         return StreamingResponse(
             event_generator(),
@@ -103,6 +127,15 @@ async def execute_agent(req: ExecuteRequest, request: Request):
         )
 
     result = await agent.execute(req.prompt, context=context)
+    usage = result.metadata.get("usage") or context.get("usage") or {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    total_tokens = usage.get("total_tokens", 0)
+    result.metadata["total_tokens"] = total_tokens
+    result.metadata["usage"] = usage
+
     return ExecuteResponse(
         content=result.content,
         agent_id=result.agent_id,
@@ -110,5 +143,7 @@ async def execute_agent(req: ExecuteRequest, request: Request):
         trace_id=result.trace_id,
         routed_to=result.metadata.get("routed_to", routed_to),
         model=result.metadata.get("model", model_name),
+        usage=usage,
+        total_tokens=total_tokens,
         metadata=result.metadata,
     )

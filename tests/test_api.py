@@ -59,6 +59,10 @@ async def test_execute_endpoint(client: AsyncClient):
     assert "trace_id" in data
     assert data["metadata"]["routed_to"] == "local"
     assert data["metadata"]["routing_strategy"] == "LOCAL_ONLY"
+    assert data["total_tokens"] is not None
+    assert data["total_tokens"] > 0
+    assert "usage" in data
+    assert data["usage"]["total_tokens"] > 0
 
 
 @pytest.mark.asyncio
@@ -70,6 +74,8 @@ async def test_execute_streaming_endpoint(client: AsyncClient):
     text = res.text
     assert "data: " in text
     assert '"done": true' in text.lower()
+    assert '"total_tokens":' in text
+    assert '"usage":' in text
 
 
 @pytest.mark.asyncio

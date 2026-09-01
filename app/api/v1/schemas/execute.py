@@ -29,6 +29,12 @@ class ExecuteResponse(BaseModel):
     model: str | None = Field(
         None, description="Specific model name (e.g. 'Qwen/Qwen2.5-7B-Instruct' or 'gemini-2.5-flash')"
     )
+    usage: dict[str, Any] | None = Field(
+        default_factory=dict, description="Token usage metrics"
+    )
+    total_tokens: int | None = Field(
+        None, description="Total token count for the execution"
+    )
     metadata: dict[str, Any] = Field(
         default_factory=dict, description="Execution metadata and usage metrics"
     )
@@ -43,3 +49,6 @@ class StreamChunk(BaseModel):
     complexity_score: float | None = None
     type: str | None = None
     usage: dict[str, Any] | None = None
+    total_tokens: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None

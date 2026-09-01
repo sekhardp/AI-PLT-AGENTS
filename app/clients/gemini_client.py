@@ -13,6 +13,37 @@ from app.clients.base import BaseLLMClient, LLMResponse
 logger = structlog.get_logger(__name__)
 
 
+def _extract_gemini_usage(um: Any) -> dict[str, int]:
+    if not um:
+        return {}
+    if isinstance(um, dict):
+        prompt = um.get("prompt_token_count") or um.get("prompt_tokens") or 0
+        completion = um.get("candidates_token_count") or um.get("completion_tokens") or 0
+        total = um.get("total_token_count") or um.get("total_tokens") or (prompt + completion)
+    else:
+        prompt = (
+            getattr(um, "prompt_token_count", None)
+            or getattr(um, "prompt_tokens", None)
+            or 0
+        )
+        completion = (
+            getattr(um, "candidates_token_count", None)
+            or getattr(um, "completion_tokens", None)
+            or getattr(um, "candidates_tokens", None)
+            or 0
+        )
+        total = (
+            getattr(um, "total_token_count", None)
+            or getattr(um, "total_tokens", None)
+            or (prompt + completion)
+        )
+    return {
+        "prompt_tokens": int(prompt),
+        "completion_tokens": int(completion),
+        "total_tokens": int(total),
+    }
+
+
 class GeminiClient(BaseLLMClient):
     """Production LLM client for Google Gemini models via Vertex AI using the Google GenAI SDK."""
 
@@ -101,12 +132,7 @@ class GeminiClient(BaseLLMClient):
 
         usage: dict[str, int] = {}
         if hasattr(response, "usage_metadata") and response.usage_metadata:
-            um = response.usage_metadata
-            usage = {
-                "prompt_tokens": getattr(um, "prompt_token_count", 0) or 0,
-                "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
-                "total_tokens": getattr(um, "total_token_count", 0) or 0,
-            }
+            usage = _extract_gemini_usage(response.usage_metadata)
 
         content = response.text or ""
 
@@ -153,12 +179,7 @@ class GeminiClient(BaseLLMClient):
 
         async for chunk in stream_response:
             if hasattr(chunk, "usage_metadata") and chunk.usage_metadata and context is not None:
-                um = chunk.usage_metadata
-                context["usage"] = {
-                    "prompt_tokens": getattr(um, "prompt_token_count", 0) or 0,
-                    "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
-                    "total_tokens": getattr(um, "total_token_count", 0) or 0,
-                }
+                context["usage"] = _extract_gemini_usage(chunk.usage_metadata)
             if chunk.text:
                 yield chunk.text
 
