@@ -9,6 +9,7 @@ import structlog
 from app.agents.base import AgentResult, BaseAgent
 from app.agents.registry import AgentRegistry
 from app.clients.base import BaseLLMClient
+from app.core.skills import skill_registry
 
 logger = structlog.get_logger(__name__)
 
@@ -56,7 +57,7 @@ class OrchestratorAgent(BaseAgent):
             "determine if the user query is asking for a specific tool or agent capability.\n\n"
             f"Available Agents:\n{json.dumps(agent_manifest, indent=2)}\n\n"
             "Rules:\n"
-            "- If the query matches an agent or tool capability (e.g. weather, bigquery, database, tool execution), "
+            "- If the query matches an agent or tool capability (e.g. rag, document search, bigquery, database, tool execution), "
             "output ONLY a JSON object with: {\"selected_agent_id\": \"<agent_id>\", \"reason\": \"<reason>\"}\n"
             "- If the query is a general conversation, explanation, coding, or greeting, output: {\"selected_agent_id\": null, \"reason\": \"general_query\"}\n"
             "Output JSON ONLY. No markdown."
@@ -91,21 +92,29 @@ class OrchestratorAgent(BaseAgent):
         return None
 
     def _build_system_prompt(self) -> str:
-        """Dynamically construct system prompt including currently registered tools."""
+        """Dynamically construct system prompt including currently registered tools and skills."""
         available_agents = [
             a for a in self.registry.list_agents() if a.agent_id != self.agent_id
         ]
-        if not available_agents:
+        skills_summary = skill_registry.get_all_skills_instructions()
+
+        if not available_agents and not skills_summary:
             return ORCHESTRATOR_SYSTEM_PROMPT
 
         tools_list = "\n".join(
             f"- {a.name} (id: {a.agent_id}): {a.description}" for a in available_agents
         )
-        return (
-            f"{ORCHESTRATOR_SYSTEM_PROMPT}\n\n"
-            f"You have access to the following specialized tools and agents:\n{tools_list}\n\n"
-            "If the user asks what tools, MCP servers, or capabilities you have, enumerate them clearly based on this list."
-        )
+        
+        prompt_parts = [ORCHESTRATOR_SYSTEM_PROMPT]
+        if tools_list:
+            prompt_parts.append(
+                f"You have access to the following specialized tools and agents:\n{tools_list}\n\n"
+                "If the user asks what tools, MCP servers, or capabilities you have, enumerate them clearly based on this list."
+            )
+        if skills_summary:
+            prompt_parts.append(f"### Standard Operating Procedures & Skills:\n{skills_summary}")
+
+        return "\n\n".join(prompt_parts)
 
     async def execute(self, prompt: str, *, context: dict[str, Any] | None = None) -> AgentResult:
         """Route to specialized agent or execute directly using Gemini LLM."""
