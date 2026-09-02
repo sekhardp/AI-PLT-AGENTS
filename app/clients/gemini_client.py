@@ -102,30 +102,44 @@ class GeminiClient(BaseLLMClient):
 
         contents: list[types.Content] = []
         for m in chat_history:
-            role = "user" if m.get("role") in ("user", "human") else "model"
-            parts: list[types.Part] = []
-
-            # 1. Model emitted tool calls
+            # 1. Model turn with tool calls
             if m.get("tool_calls"):
-                for tc in m["tool_calls"]:
-                    name = tc.name if hasattr(tc, "name") else tc.get("name")
-                    args = tc.arguments if hasattr(tc, "arguments") else tc.get("arguments", {})
-                    parts.append(types.Part.from_function_call(name=name, args=args))
-                role = "model"
-            # 2. Tool response back to model
+                parts = [
+                    types.Part.from_function_call(
+                        name=tc.name if hasattr(tc, "name") else tc.get("name"),
+                        args=tc.arguments if hasattr(tc, "arguments") else tc.get("arguments", {}),
+                    )
+                    for tc in m["tool_calls"]
+                ]
+                contents.append(types.Content(role="model", parts=parts))
+
+            # 2. Tool response turn (supports single or parallel responses in m["responses"])
             elif m.get("role") == "tool" or m.get("type") == "tool_response":
-                tool_name = m.get("name") or "tool"
-                res = m.get("content") or m.get("response") or {}
-                if isinstance(res, str):
-                    res = {"output": res}
-                parts.append(types.Part.from_function_response(name=tool_name, response=res))
-                role = "user"
+                if "responses" in m:
+                    parts = []
+                    for r in m["responses"]:
+                        name = r.get("name") or "tool"
+                        res = r.get("content") or r.get("response") or {}
+                        if isinstance(res, str):
+                            res = {"output": res}
+                        parts.append(types.Part.from_function_response(name=name, response=res))
+                    contents.append(types.Content(role="user", parts=parts))
+                else:
+                    name = m.get("name") or "tool"
+                    res = m.get("content") or m.get("response") or {}
+                    if isinstance(res, str):
+                        res = {"output": res}
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_function_response(name=name, response=res)],
+                        )
+                    )
+
             # 3. Standard text content
             elif m.get("content"):
-                parts.append(types.Part.from_text(text=m["content"]))
-
-            if parts:
-                contents.append(types.Content(role=role, parts=parts))
+                role = "user" if m.get("role") in ("user", "human") else "model"
+                contents.append(types.Content(role=role, parts=[types.Part.from_text(text=m["content"])]))
 
         if prompt:
             contents.append(

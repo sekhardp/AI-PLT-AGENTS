@@ -88,27 +88,42 @@ class LocalLLMClient(BaseLLMClient):
             messages.append({"role": "system", "content": system_prompt})
         if chat_history:
             for m in chat_history:
-                role = m.get("role", "user")
-                if role not in ("user", "assistant", "system", "tool"):
-                    role = "user"
-                msg: dict[str, Any] = {"role": role, "content": m.get("content", "")}
-                if "tool_calls" in m:
-                    tcs = []
-                    for tc in m["tool_calls"]:
-                        name = tc.name if hasattr(tc, "name") else tc.get("name")
-                        args = tc.arguments if hasattr(tc, "arguments") else tc.get("arguments", {})
-                        tcs.append({
-                            "id": getattr(tc, "id", None) or tc.get("id") or name,
+                # 1. Model turn with tool calls
+                if m.get("tool_calls"):
+                    tcs = [
+                        {
+                            "id": getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else None) or (tc.name if hasattr(tc, "name") else tc.get("name")),
                             "type": "function",
                             "function": {
-                                "name": name,
-                                "arguments": json.dumps(args) if isinstance(args, dict) else str(args),
+                                "name": tc.name if hasattr(tc, "name") else tc.get("name"),
+                                "arguments": json.dumps(tc.arguments if hasattr(tc, "arguments") else tc.get("arguments", {}))
+                                if isinstance(tc.arguments if hasattr(tc, "arguments") else tc.get("arguments"), dict)
+                                else str(tc.arguments if hasattr(tc, "arguments") else tc.get("arguments")),
                             },
-                        })
-                    msg["tool_calls"] = tcs
-                if "tool_call_id" in m:
-                    msg["tool_call_id"] = m["tool_call_id"]
-                messages.append(msg)
+                        }
+                        for tc in m["tool_calls"]
+                    ]
+                    messages.append({"role": "assistant", "content": m.get("content") or None, "tool_calls": tcs})
+
+                # 2. Tool response turn (supports single or parallel responses in m["responses"])
+                elif m.get("role") == "tool" or m.get("type") == "tool_response":
+                    if "responses" in m:
+                        for r in m["responses"]:
+                            call_id = r.get("tool_call_id") or r.get("name") or "tool"
+                            content_val = r.get("content") if isinstance(r.get("content"), str) else json.dumps(r.get("content", {}))
+                            messages.append({"role": "tool", "tool_call_id": call_id, "content": content_val})
+                    else:
+                        call_id = m.get("tool_call_id") or m.get("name") or "tool"
+                        content_val = m.get("content") if isinstance(m.get("content"), str) else json.dumps(m.get("content", {}))
+                        messages.append({"role": "tool", "tool_call_id": call_id, "content": content_val})
+
+                # 3. Standard text message
+                elif m.get("content"):
+                    role = m.get("role", "user")
+                    if role not in ("user", "assistant", "system"):
+                        role = "user"
+                    messages.append({"role": role, "content": m["content"]})
+
         if prompt:
             messages.append({"role": "user", "content": prompt})
         return messages

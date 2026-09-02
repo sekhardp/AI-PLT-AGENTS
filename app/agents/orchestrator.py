@@ -104,6 +104,7 @@ class OrchestratorAgent(BaseAgent):
             current_calls = response.tool_calls
             chat_history.append({"role": "model", "tool_calls": current_calls})
 
+            responses: list[dict[str, Any]] = []
             for tc in current_calls:
                 logger.info("orchestrator_invoking_tool", tool_name=tc.name, arguments=tc.arguments)
                 try:
@@ -116,13 +117,16 @@ class OrchestratorAgent(BaseAgent):
                     "arguments": tc.arguments,
                     "result": raw_result,
                 })
-
-                chat_history.append({
-                    "role": "tool",
+                responses.append({
                     "name": tc.name,
                     "tool_call_id": tc.id,
                     "content": raw_result,
                 })
+
+            chat_history.append({
+                "role": "tool",
+                "responses": responses,
+            })
 
             response = await self.llm_client.generate(
                 prompt="",
@@ -174,6 +178,7 @@ class OrchestratorAgent(BaseAgent):
             # If tool calls are requested, execute them first before streaming synthesis
             if response.tool_calls:
                 chat_history.append({"role": "model", "tool_calls": response.tool_calls})
+                responses: list[dict[str, Any]] = []
                 for tc in response.tool_calls:
                     logger.info("orchestrator_streaming_invoking_tool", tool_name=tc.name, arguments=tc.arguments)
                     try:
@@ -181,12 +186,16 @@ class OrchestratorAgent(BaseAgent):
                     except Exception as e:
                         raw_result = f"Error executing tool '{tc.name}': {e!s}"
 
-                    chat_history.append({
-                        "role": "tool",
+                    responses.append({
                         "name": tc.name,
                         "tool_call_id": tc.id,
                         "content": raw_result,
                     })
+
+                chat_history.append({
+                    "role": "tool",
+                    "responses": responses,
+                })
 
                 # Stream synthesis from tool results
                 stream_kwargs: dict[str, Any] = {
