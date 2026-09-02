@@ -10,6 +10,11 @@ def test_skill_discovery():
     assert "search_knowledge_base" in rag_skill["tools"]
     assert "SOP" in rag_skill["body"] or "Workflow" in rag_skill["body"]
 
+    # Verify namespaced tool resolution
+    namespaced_skill = skill_registry.get_skill_for_tool("rag_server__search_knowledge_base")
+    assert namespaced_skill is not None
+    assert namespaced_skill["name"] == "rag-knowledge-base"
+
 
 def test_all_skills_instructions():
     """Verify aggregated skill instructions are formatted for system prompts."""

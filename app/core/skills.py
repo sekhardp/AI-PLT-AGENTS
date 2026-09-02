@@ -87,6 +87,9 @@ class SkillRegistry:
     def get_skill_for_tool(self, tool_name: str) -> Optional[dict[str, Any]]:
         """Retrieve the skill specification for a given MCP tool name."""
         skill_name = self._tool_to_skill.get(tool_name)
+        if not skill_name and "__" in tool_name:
+            bare_tool = tool_name.split("__", 1)[-1]
+            skill_name = self._tool_to_skill.get(bare_tool)
         if skill_name:
             return self._skills.get(skill_name)
         return None

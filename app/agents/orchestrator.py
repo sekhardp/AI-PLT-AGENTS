@@ -33,7 +33,9 @@ class OrchestratorAgent(BaseAgent):
         self.registry = registry
         self.llm_client = llm_client
 
-    async def _select_delegate_agent(self, prompt: str) -> BaseAgent | None:
+    async def _select_delegate_agent(
+        self, prompt: str, *, context: dict[str, Any] | None = None
+    ) -> BaseAgent | None:
         """Uses real LLM classification to select the best specialized agent or None if general query."""
         available_agents = [
             a for a in self.registry.list_agents() if a.agent_id != self.agent_id
@@ -53,20 +55,26 @@ class OrchestratorAgent(BaseAgent):
         ]
 
         routing_system_prompt = (
-            "You are a routing dispatcher. Given a user query and a list of available agents/tools, "
-            "determine if the user query is asking for a specific tool or agent capability.\n\n"
+            "You are a routing dispatcher. Given a user query, preceding chat history, and available agents/tools, "
+            "determine if the query requires a specialized tool or agent capability.\n\n"
             f"Available Agents:\n{json.dumps(agent_manifest, indent=2)}\n\n"
             "Rules:\n"
-            "- If the query matches an agent or tool capability (e.g. rag, document search, bigquery, database, tool execution), "
-            "output ONLY a JSON object with: {\"selected_agent_id\": \"<agent_id>\", \"reason\": \"<reason>\"}\n"
-            "- If the query is a general conversation, explanation, coding, or greeting, output: {\"selected_agent_id\": null, \"reason\": \"general_query\"}\n"
+            "- For searching, summarizing, or asking questions about uploaded documents / document IDs, select the knowledge base search agent (e.g. search_knowledge_base).\n"
+            "- For listing or checking what documents exist, select list_user_documents.\n"
+            "- For SQL, databases, or BigQuery queries, select the BigQuery agent.\n"
+            "- If the query is a follow-up (e.g., 'sure', 'try again', 'yes', 'summarize it') and previous conversation was about a document or database, maintain delegation to the corresponding agent.\n"
+            "- If matched, output ONLY a JSON object with: {\"selected_agent_id\": \"<agent_id>\", \"reason\": \"<reason>\"}\n"
+            "- If the query is a general greeting, general coding explanation, or generic conversation, output: {\"selected_agent_id\": null, \"reason\": \"general_query\"}\n"
             "Output JSON ONLY. No markdown."
         )
+
+        chat_history = context.get("chat_history") if context else None
 
         try:
             resp = await self.llm_client.generate(
                 prompt=prompt,
                 system_prompt=routing_system_prompt,
+                chat_history=chat_history,
                 temperature=0.1,
             )
 
@@ -118,7 +126,7 @@ class OrchestratorAgent(BaseAgent):
 
     async def execute(self, prompt: str, *, context: dict[str, Any] | None = None) -> AgentResult:
         """Route to specialized agent or execute directly using Gemini LLM."""
-        delegate = await self._select_delegate_agent(prompt)
+        delegate = await self._select_delegate_agent(prompt, context=context)
 
         if delegate:
             result = await delegate.execute(prompt, context=context)
@@ -160,7 +168,7 @@ class OrchestratorAgent(BaseAgent):
         self, prompt: str, *, context: dict[str, Any] | None = None
     ) -> AsyncGenerator[str, None]:
         """Route and stream from delegate agent or stream directly from Smart Router LLM."""
-        delegate = await self._select_delegate_agent(prompt)
+        delegate = await self._select_delegate_agent(prompt, context=context)
 
         if delegate:
             async for token in delegate.stream(prompt, context=context):

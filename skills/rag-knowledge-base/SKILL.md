@@ -3,42 +3,50 @@ name: rag-knowledge-base
 description: Standard operating procedure for searching, retrieving, and synthesizing grounded information from uploaded user documents using the RAG MCP server tools (search_knowledge_base, list_user_documents, get_document_snippet).
 tools:
   - search_knowledge_base
+  - rag_server__search_knowledge_base
   - list_user_documents
+  - rag_server__list_user_documents
   - get_document_snippet
+  - rag_server__get_document_snippet
 ---
 
 # RAG Knowledge Base Retrieval Skill
 
 Use this skill whenever the user asks questions referencing uploaded files, domain policies, corporate reports, financial statistics, or indexed document knowledge.
 
-## Capabilities & Tools
+## Capabilities & Tool Selection Guide
 
-1. **`search_knowledge_base(query, user_id, document_ids=None, top_k=5, mode='hybrid')`**:
+1. **`search_knowledge_base(query, user_id, document_ids=None, top_k=5, mode='hybrid')`** (PRIMARY TOOL FOR CONTENT & SUMMARIZATION):
    - Executes Hybrid Search (pgvector cosine similarity + BM25 keyword matching with Reciprocal Rank Fusion).
    - Scoped strictly to the authenticated `user_id` to maintain multi-tenant data isolation.
+   - **CRITICAL**: Use this tool whenever the user asks to summarize a document, explain what a document is about, or answers questions using a `document_id`. Filter with `document_ids=[<document_id>]`.
    - Modes: `hybrid` (recommended), `vector` (semantic search), `bm25` (exact keyword lookup).
 
 2. **`list_user_documents(user_id)`**:
    - Discovers all ready, indexed documents available to the user.
-   - Returns document UUIDs, filenames, file sizes, and timestamps.
+   - Returns document UUIDs (`document_id`), filenames, file sizes, and timestamps.
+   - Use when the user asks "what documents do I have?" or when verifying uploaded files.
 
 3. **`get_document_snippet(chunk_id, user_id)`**:
-   - Retrieves the full text, token count, and metadata for a specific document chunk.
+   - Retrieves the full text, token count, and metadata for a **specific chunk UUID**.
+   - **CRITICAL WARNING**: `chunk_id` is a chunk-level UUID returned in search results. Do **NOT** pass a `document_id` to this tool. If you have a `document_id`, call `search_knowledge_base` with `document_ids=[<document_id>]`.
 
 ---
 
 ## Step-by-Step SOP (Standard Operating Procedure)
 
 ### Step 1: Resolve Target Documents & Scope
-- If the user's request explicitly includes `document_ids` in request metadata, restrict the search to those IDs.
+- If the user's request includes a `document_id` (or asks to summarize/read an attached file), ALWAYS invoke `search_knowledge_base` with `document_ids=[<document_id>]`.
 - If no specific documents were attached or if the user asks *"what documents do I have?"*, call `list_user_documents(user_id=...)` first to inspect available documents.
 
 ### Step 2: Query Formulation Heuristic (Critical)
-Do **NOT** pass conversational or verbose questions directly to `search_knowledge_base`.
+Do **NOT** pass conversational questions directly to `search_knowledge_base`.
 Extract 2–4 dense semantic/keyword terms from the user query:
 
 * **User Prompt:** *"Can you check the Q3 financial report and tell me what the total operating profit was in North America?"*
 * **Optimized Search Query:** `Q3 financial report North America operating profit revenue`
+* **User Prompt (Summarization):** *"What is this document about? (ID: 1113a886-...)"*
+* **Optimized Search Query:** `document summary overview key points main topics` (with `document_ids=["1113a886-..."]`)
 
 ### Step 3: Search Execution
 Invoke `search_knowledge_base` with `mode='hybrid'`:

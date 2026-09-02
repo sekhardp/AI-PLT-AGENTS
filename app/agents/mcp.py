@@ -45,21 +45,27 @@ class MCPAgent(BaseAgent):
             return f"\n\n### Attached Skill Workflow & SOP ({skill['name']}):\n{skill['body']}\n"
         return ""
 
-    async def _extract_tool_arguments(self, prompt: str) -> dict[str, Any]:
-        """Uses real LLM to extract JSON arguments from user prompt matching the tool's JSON schema and skill rules."""
+    async def _extract_tool_arguments(
+        self, prompt: str, *, context: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Uses real LLM to extract JSON arguments from user prompt and context matching the tool's JSON schema and skill rules."""
         skill_prompt = self._get_skill_instructions()
         extraction_system_prompt = (
             f"You are a structured parameter extractor for the tool '{self.tool_name}'.\n"
             f"Tool Description: {self.description}\n"
             f"Tool JSON Schema:\n{json.dumps(self.tool_schema, indent=2)}\n"
             f"{skill_prompt}\n"
-            "Analyze the user query and output ONLY a valid JSON object representing the tool arguments.\n"
+            "Analyze the user query and preceding conversation to extract the exact tool arguments.\n"
+            "Output ONLY a valid JSON object representing the tool arguments.\n"
             "Do not include markdown codeblocks or explanation. Output valid JSON only."
         )
+
+        chat_history = context.get("chat_history") if context else None
 
         resp = await self.llm_client.generate(
             prompt=prompt,
             system_prompt=extraction_system_prompt,
+            chat_history=chat_history,
             temperature=0.1,
         )
 
@@ -72,8 +78,11 @@ class MCPAgent(BaseAgent):
                 lines = lines[:-1]
             cleaned_text = "\n".join(lines).strip()
 
+        extracted_args: dict[str, Any] = {}
         try:
-            return json.loads(cleaned_text)
+            extracted_args = json.loads(cleaned_text)
+            if not isinstance(extracted_args, dict):
+                extracted_args = {}
         except Exception as e:
             logger.warning(
                 "mcp_argument_json_parse_failed",
@@ -81,13 +90,22 @@ class MCPAgent(BaseAgent):
                 raw=cleaned_text,
                 error=str(e),
             )
-            return {}
+            extracted_args = {}
+
+        # Fallback / inject contextual fields if missing
+        if context:
+            if "user_id" in context and "user_id" not in extracted_args:
+                extracted_args["user_id"] = context["user_id"]
+            if "document_ids" in context and not extracted_args.get("document_ids"):
+                extracted_args["document_ids"] = context["document_ids"]
+
+        return extracted_args
 
     async def execute(self, prompt: str, *, context: dict[str, Any] | None = None) -> AgentResult:
         """Extract arguments, execute MCP tool against registry gateway, and synthesize final answer with grounding rules."""
         logger.info("mcp_agent_execute", agent_id=self.agent_id, tool_name=self.tool_name)
 
-        arguments = await self._extract_tool_arguments(prompt)
+        arguments = await self._extract_tool_arguments(prompt, context=context)
 
         try:
             raw_tool_result = await self.mcp_client.call_tool(self.tool_name, arguments)
@@ -109,9 +127,12 @@ class MCPAgent(BaseAgent):
             "Follow any grounding and citation instructions specified in the attached skill."
         )
 
+        chat_history = context.get("chat_history") if context else None
+
         response = await self.llm_client.generate(
             prompt=synthesis_prompt,
             system_prompt="You are an expert AI assistant providing insights, grounded answers, and summarizing tool results accurately.",
+            chat_history=chat_history,
             temperature=0.7,
         )
 
@@ -133,7 +154,7 @@ class MCPAgent(BaseAgent):
         self, prompt: str, *, context: dict[str, Any] | None = None
     ) -> AsyncGenerator[str, None]:
         """Stream synthesized answer from tool execution respecting skill citation rules."""
-        arguments = await self._extract_tool_arguments(prompt)
+        arguments = await self._extract_tool_arguments(prompt, context=context)
 
         try:
             raw_tool_result = await self.mcp_client.call_tool(self.tool_name, arguments)
@@ -150,9 +171,12 @@ class MCPAgent(BaseAgent):
             "Follow any grounding and citation instructions specified in the attached skill."
         )
 
+        chat_history = context.get("chat_history") if context else None
+
         async for token in self.llm_client.stream(
             prompt=synthesis_prompt,
             system_prompt="You are an expert AI assistant summarizing tool results with strict grounding and citations.",
+            chat_history=chat_history,
             temperature=0.7,
             context=context,
         ):
