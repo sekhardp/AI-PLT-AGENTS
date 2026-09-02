@@ -1,72 +1,47 @@
 ---
 name: rag-knowledge-base
-description: Standard operating procedure for searching, retrieving, and synthesizing grounded information from uploaded user documents using the RAG MCP server tools (search_knowledge_base, list_user_documents, get_document_snippet).
+description: Standard operating procedure for searching documents, checking vector status, and retrieving knowledge using RAG MCP server tools.
 tools:
-  - search_knowledge_base
   - rag_server__search_knowledge_base
-  - list_user_documents
-  - rag_server__list_user_documents
-  - get_document_snippet
-  - rag_server__get_document_snippet
+  - rag_server__check_document_vector_status
+  - rag_server__list_available_documents
 ---
 
 # RAG Knowledge Base Retrieval Skill
 
-Use this skill whenever the user asks questions referencing uploaded files, domain policies, corporate reports, financial statistics, or indexed document knowledge.
+Use this skill whenever the user asks questions referencing uploaded documents, domain policies, corporate reports, or knowledge base files.
 
-## Capabilities & Tool Selection Guide
+## Available Tools
 
-1. **`search_knowledge_base(query, user_id, document_ids=None, top_k=5, mode='hybrid')`** (PRIMARY TOOL FOR CONTENT & SUMMARIZATION):
-   - Executes Hybrid Search (pgvector cosine similarity + BM25 keyword matching with Reciprocal Rank Fusion).
-   - Scoped strictly to the authenticated `user_id` to maintain multi-tenant data isolation.
-   - **CRITICAL**: Use this tool whenever the user asks to summarize a document, explain what a document is about, or answers questions using a `document_id`. Filter with `document_ids=[<document_id>]`.
-   - Modes: `hybrid` (recommended), `vector` (semantic search), `bm25` (exact keyword lookup).
+1. **`rag_server__search_knowledge_base(query, document_id=None, top_k=10)`**:
+   - **Primary Retrieval Tool**: Directly retrieves the most relevant raw text passages (10–15 chunks) using cosine similarity.
+   - If a specific `document_id` is provided, restricts search scope to that document.
+   - If `document_id` is omitted, searches across all ready documents in the knowledge base.
 
-2. **`list_user_documents(user_id)`**:
-   - Discovers all ready, indexed documents available to the user.
-   - Returns document UUIDs (`document_id`), filenames, file sizes, and timestamps.
-   - Use when the user asks "what documents do I have?" or when verifying uploaded files.
+2. **`rag_server__check_document_vector_status(document_id)`**:
+   - Checks whether a document has been vectorized and is ready for retrieval.
+   - Returns `{ is_vectorized: true/false, status: "ready", total_chunks: N, filename: "..." }`.
 
-3. **`get_document_snippet(chunk_id, user_id)`**:
-   - Retrieves the full text, token count, and metadata for a **specific chunk UUID**.
-   - **CRITICAL WARNING**: `chunk_id` is a chunk-level UUID returned in search results. Do **NOT** pass a `document_id` to this tool. If you have a `document_id`, call `search_knowledge_base` with `document_ids=[<document_id>]`.
+3. **`rag_server__list_available_documents(limit=50)`**:
+   - Lists all available documents in the knowledge base with their `document_id`, `filename`, and `status`.
 
 ---
 
-## Step-by-Step SOP (Standard Operating Procedure)
+## Step-by-Step Workflow
 
-### Step 1: Resolve Target Documents & Scope
-- If the user's request includes a `document_id` (or asks to summarize/read an attached file), ALWAYS invoke `search_knowledge_base` with `document_ids=[<document_id>]`.
-- If no specific documents were attached or if the user asks *"what documents do I have?"*, call `list_user_documents(user_id=...)` first to inspect available documents.
+### Step 1: Identify Target Documents
+* **Single Document:** Pass the given `document_id` to `rag_server__search_knowledge_base`.
+* **Multiple Documents (Parallel Tool Calls):** If the user references multiple files or provides multiple `document_id`s, **call `rag_server__search_knowledge_base` in parallel for each document ID** in a single turn.
+* **Document Discovery:** If the user asks *"what documents do I have?"*, call `rag_server__list_available_documents()`.
+* **Status Check:** If verifying upload readiness, call `rag_server__check_document_vector_status(document_id=...)`.
 
-### Step 2: Query Formulation Heuristic (Critical)
-Do **NOT** pass conversational questions directly to `search_knowledge_base`.
-Extract 2–4 dense semantic/keyword terms from the user query:
+### Step 2: Multi-Document Parallel Execution
+When comparing or answering across multiple documents (e.g. `doc_A` and `doc_B`), execute parallel tool calls:
+- Tool Call 1: `rag_server__search_knowledge_base(query="...", document_id="doc_A_uuid", top_k=10)`
+- Tool Call 2: `rag_server__search_knowledge_base(query="...", document_id="doc_B_uuid", top_k=10)`
 
-* **User Prompt:** *"Can you check the Q3 financial report and tell me what the total operating profit was in North America?"*
-* **Optimized Search Query:** `Q3 financial report North America operating profit revenue`
-* **User Prompt (Summarization):** *"What is this document about? (ID: 1113a886-...)"*
-* **Optimized Search Query:** `document summary overview key points main topics` (with `document_ids=["1113a886-..."]`)
-
-### Step 3: Search Execution
-Invoke `search_knowledge_base` with `mode='hybrid'`:
-```json
-{
-  "query": "North America Q3 operating profit revenue",
-  "user_id": "<authenticated_user_id>",
-  "document_ids": ["3fa85f64-5717-4562-b3fc-2c963f66afa6"],
-  "top_k": 5,
-  "mode": "hybrid"
-}
-```
-
-### Step 4: Multi-Hop Search & Refinement
-- If the initial search yields low-confidence chunks or does not fully answer the question:
-  1. Identify missing keywords or specific section headings from the first result.
-  2. Perform **one refined secondary search** (e.g., using `mode='bm25'` for exact numbers, codes, or error strings).
-
-### Step 5: Grounded Answer Synthesis & Citations
-- **Strict Grounding:** Only make statements that are factually supported by the returned chunk text. Do not hallucinate external figures.
-- **Citation Requirement:** Every factual assertion must cite its source using standard document tags:
-  `North American operating profit reached $412M in Q3 [Document: Q3_Financials.pdf, Chunk #4].`
-- Never expose raw database UUIDs or internal cosine similarity scores to the user.
+### Step 3: Synthesis, Grounding & Citations
+* Inspect the returned chunks from **all** queried documents.
+* Synthesize a unified, grounded answer comparing or combining the information from each document.
+* **Grounding:** Synthesize your answer accurately using only facts supported by the returned text passages. Do not hallucinate external details.
+* **Citations:** Clearly attribute facts to their source document and chunk (e.g., `[Doc A, Chunk #2]` vs `[Doc B, Chunk #5]`).

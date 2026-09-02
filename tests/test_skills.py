@@ -4,16 +4,11 @@ from app.core.skills import skill_registry
 def test_skill_discovery():
     """Verify that SKILL.md for rag-knowledge-base is discovered and parsed."""
     skill_registry.reload_skills()
-    rag_skill = skill_registry.get_skill_for_tool("search_knowledge_base")
+    rag_skill = skill_registry.get_skill_for_tool("rag_server__search_knowledge_base")
     assert rag_skill is not None
     assert rag_skill["name"] == "rag-knowledge-base"
-    assert "search_knowledge_base" in rag_skill["tools"]
+    assert "rag_server__search_knowledge_base" in rag_skill["tools"]
     assert "SOP" in rag_skill["body"] or "Workflow" in rag_skill["body"]
-
-    # Verify namespaced tool resolution
-    namespaced_skill = skill_registry.get_skill_for_tool("rag_server__search_knowledge_base")
-    assert namespaced_skill is not None
-    assert namespaced_skill["name"] == "rag-knowledge-base"
 
 
 def test_all_skills_instructions():
