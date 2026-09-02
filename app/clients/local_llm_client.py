@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import structlog
 
-from app.clients.base import BaseLLMClient, LLMResponse
+from app.clients.base import BaseLLMClient, LLMResponse, ToolCall
 
 logger = structlog.get_logger(__name__)
 
@@ -60,21 +60,57 @@ class LocalLLMClient(BaseLLMClient):
             timeout_seconds=self.timeout_seconds,
         )
 
+    def _build_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        """Convert MCP JSON schemas to OpenAI-compatible Tool declarations."""
+        if not tools:
+            return None
+        formatted = []
+        for t in tools:
+            schema = t.get("input_schema") or t.get("parameters") or {}
+            formatted.append({
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": schema,
+                },
+            })
+        return formatted
+
     def _build_messages(
         self,
-        prompt: str,
+        prompt: str | None = None,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
-    ) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = []
+        chat_history: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         if chat_history:
             for m in chat_history:
                 role = m.get("role", "user")
-                if role in ("user", "assistant", "system"):
-                    messages.append({"role": role, "content": m.get("content", "")})
-        messages.append({"role": "user", "content": prompt})
+                if role not in ("user", "assistant", "system", "tool"):
+                    role = "user"
+                msg: dict[str, Any] = {"role": role, "content": m.get("content", "")}
+                if "tool_calls" in m:
+                    tcs = []
+                    for tc in m["tool_calls"]:
+                        name = tc.name if hasattr(tc, "name") else tc.get("name")
+                        args = tc.arguments if hasattr(tc, "arguments") else tc.get("arguments", {})
+                        tcs.append({
+                            "id": getattr(tc, "id", None) or tc.get("id") or name,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": json.dumps(args) if isinstance(args, dict) else str(args),
+                            },
+                        })
+                    msg["tool_calls"] = tcs
+                if "tool_call_id" in m:
+                    msg["tool_call_id"] = m["tool_call_id"]
+                messages.append(msg)
+        if prompt:
+            messages.append({"role": "user", "content": prompt})
         return messages
 
     async def generate(
@@ -82,21 +118,27 @@ class LocalLLMClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         """Generate full completion using local LLM instance via OpenAI-compatible endpoint."""
         temp = temperature if temperature is not None else self.default_temperature
         max_tok = max_tokens if max_tokens is not None else self.default_max_tokens
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": self._build_messages(prompt, system_prompt, chat_history),
             "temperature": temp,
             "max_tokens": max_tok,
             "stream": False,
         }
+        built_tools = self._build_tools(tools)
+        if built_tools:
+            payload["tools"] = built_tools
 
         start = time.perf_counter()
         try:
@@ -116,7 +158,26 @@ class LocalLLMClient(BaseLLMClient):
 
         latency_ms = (time.perf_counter() - start) * 1000
         choices = data.get("choices", [])
-        content = choices[0].get("message", {}).get("content", "") if choices else ""
+        message = choices[0].get("message", {}) if choices else {}
+        content = message.get("content") or ""
+
+        # Parse OpenAI tool_calls if emitted by local LLM
+        tool_calls: list[ToolCall] = []
+        for tc in message.get("tool_calls", []):
+            fn = tc.get("function", {})
+            name = fn.get("name", "")
+            raw_args = fn.get("arguments", "{}")
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+            except Exception:
+                args = {}
+            tool_calls.append(
+                ToolCall(
+                    id=tc.get("id") or name,
+                    name=name,
+                    arguments=args,
+                )
+            )
 
         raw_usage = data.get("usage", {})
         p_tok = int(raw_usage.get("prompt_tokens", 0) or 0)
@@ -134,6 +195,7 @@ class LocalLLMClient(BaseLLMClient):
             model=self.model_name,
             latency_ms=round(latency_ms, 1),
             total_tokens=usage["total_tokens"],
+            tool_calls_count=len(tool_calls),
         )
 
         return LLMResponse(
@@ -143,6 +205,7 @@ class LocalLLMClient(BaseLLMClient):
             usage=usage,
             latency_ms=latency_ms,
             metadata={"base_url": self.base_url},
+            tool_calls=tool_calls,
         )
 
     async def stream(
@@ -150,16 +213,18 @@ class LocalLLMClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
         context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
         """Stream tokens asynchronously from local LLM instance and capture usage metadata."""
         temp = temperature if temperature is not None else self.default_temperature
         max_tok = max_tokens if max_tokens is not None else self.default_max_tokens
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": self._build_messages(prompt, system_prompt, chat_history),
             "temperature": temp,
@@ -167,6 +232,9 @@ class LocalLLMClient(BaseLLMClient):
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        built_tools = self._build_tools(tools)
+        if built_tools:
+            payload["tools"] = built_tools
 
         try:
             async with self._client.stream("POST", "/chat/completions", json=payload) as response:

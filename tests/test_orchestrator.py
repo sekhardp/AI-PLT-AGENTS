@@ -22,9 +22,9 @@ async def test_orchestrator_delegation_to_mcp(
     registry.register(mcp_agent)
 
     result = await orchestrator.execute("What is the weather in San Francisco?")
-    assert result.agent_id == "mcp-get_weather"
-    assert result.metadata["routed_by"] == "orchestrator-01"
-    assert "tool_name" in result.metadata
+    assert result.agent_id == "orchestrator-01"
+    assert len(result.metadata.get("executed_tools", [])) > 0
+    assert result.metadata["executed_tools"][0]["tool_name"] == "get_weather"
 
 
 @pytest.mark.asyncio

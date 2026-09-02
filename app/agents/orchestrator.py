@@ -21,7 +21,7 @@ When specialized tools or domain agents are registered, evaluate whether the use
 
 
 class OrchestratorAgent(BaseAgent):
-    """Production Orchestrator Agent powered by Google Gemini for intelligent intent routing and multi-agent execution."""
+    """Production Master Orchestrator Agent powered by native Model Context Protocol (MCP) tool execution."""
 
     def __init__(self, registry: AgentRegistry, llm_client: BaseLLMClient) -> None:
         super().__init__(
@@ -33,120 +33,104 @@ class OrchestratorAgent(BaseAgent):
         self.registry = registry
         self.llm_client = llm_client
 
-    async def _select_delegate_agent(
-        self, prompt: str, *, context: dict[str, Any] | None = None
-    ) -> BaseAgent | None:
-        """Uses real LLM classification to select the best specialized agent or None if general query."""
-        available_agents = [
-            a for a in self.registry.list_agents() if a.agent_id != self.agent_id
-        ]
+    def _get_available_mcp_tools(self) -> list[dict[str, Any]]:
+        """Retrieve all discovered MCP tool schemas from registered agents."""
+        tools: list[dict[str, Any]] = []
+        for a in self.registry.list_agents():
+            if a.agent_id != self.agent_id:
+                tool_name = getattr(a, "tool_name", None) or a.capabilities[0]
+                tool_schema = getattr(a, "tool_schema", None) or {}
+                tools.append({
+                    "name": tool_name,
+                    "description": a.description,
+                    "input_schema": tool_schema,
+                })
+        return tools
 
-        if not available_agents:
-            return None
+    async def _execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
+        """Execute a tool against the registered MCP client."""
+        for a in self.registry.list_agents():
+            if getattr(a, "tool_name", None) == tool_name or a.agent_id == f"mcp-{tool_name}":
+                mcp_client = getattr(a, "mcp_client", None)
+                if mcp_client:
+                    return await mcp_client.call_tool(tool_name, arguments)
+        return f"Error: Tool '{tool_name}' not found."
 
-        agent_manifest = [
-            {
-                "agent_id": a.agent_id,
-                "name": a.name,
-                "description": a.description,
-                "capabilities": a.capabilities,
-            }
-            for a in available_agents
-        ]
+    def _build_system_prompt(self, context: dict[str, Any] | None = None) -> str:
+        """Dynamically construct system prompt including user context, currently registered skills and operating guidelines."""
+        parts = [ORCHESTRATOR_SYSTEM_PROMPT]
 
-        routing_system_prompt = (
-            "You are a routing dispatcher. Given a user query, preceding chat history, and available agents/tools, "
-            "determine if the query requires a specialized tool or agent capability.\n\n"
-            f"Available Agents:\n{json.dumps(agent_manifest, indent=2)}\n\n"
-            "Rules:\n"
-            "- For searching, summarizing, or asking questions about uploaded documents / document IDs, select the knowledge base search agent (e.g. search_knowledge_base).\n"
-            "- For listing or checking what documents exist, select list_user_documents.\n"
-            "- For SQL, databases, or BigQuery queries, select the BigQuery agent.\n"
-            "- If the query is a follow-up (e.g., 'sure', 'try again', 'yes', 'summarize it') and previous conversation was about a document or database, maintain delegation to the corresponding agent.\n"
-            "- If matched, output ONLY a JSON object with: {\"selected_agent_id\": \"<agent_id>\", \"reason\": \"<reason>\"}\n"
-            "- If the query is a general greeting, general coding explanation, or generic conversation, output: {\"selected_agent_id\": null, \"reason\": \"general_query\"}\n"
-            "Output JSON ONLY. No markdown."
-        )
+        if context:
+            ctx_items = []
+            if "document_id" in context:
+                ctx_items.append(f"- Active Document ID: {context['document_id']}")
+            elif "document_ids" in context:
+                ctx_items.append(f"- Active Document IDs: {context['document_ids']}")
+            if "user_id" in context:
+                ctx_items.append(f"- User ID: {context['user_id']}")
+            if ctx_items:
+                parts.append("### Current Session Context:\n" + "\n".join(ctx_items))
 
-        chat_history = context.get("chat_history") if context else None
-
-        try:
-            resp = await self.llm_client.generate(
-                prompt=prompt,
-                system_prompt=routing_system_prompt,
-                chat_history=chat_history,
-                temperature=0.1,
-            )
-
-            cleaned_text = resp.content.strip()
-            if cleaned_text.startswith("```"):
-                lines = cleaned_text.splitlines()
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                cleaned_text = "\n".join(lines).strip()
-
-            data = json.loads(cleaned_text)
-            selected_id = data.get("selected_agent_id")
-            if selected_id:
-                agent = self.registry.get(selected_id)
-                if agent:
-                    logger.info("orchestrator_delegating", to_agent=agent.agent_id, reason=data.get("reason"))
-                    return agent
-        except Exception as e:
-            logger.warning("orchestrator_routing_classification_failed", error=str(e))
-
-        return None
-
-    def _build_system_prompt(self) -> str:
-        """Dynamically construct system prompt including currently registered tools and skills."""
-        available_agents = [
-            a for a in self.registry.list_agents() if a.agent_id != self.agent_id
-        ]
         skills_summary = skill_registry.get_all_skills_instructions()
-
-        if not available_agents and not skills_summary:
-            return ORCHESTRATOR_SYSTEM_PROMPT
-
-        tools_list = "\n".join(
-            f"- {a.name} (id: {a.agent_id}): {a.description}" for a in available_agents
-        )
-        
-        prompt_parts = [ORCHESTRATOR_SYSTEM_PROMPT]
-        if tools_list:
-            prompt_parts.append(
-                f"You have access to the following specialized tools and agents:\n{tools_list}\n\n"
-                "If the user asks what tools, MCP servers, or capabilities you have, enumerate them clearly based on this list."
-            )
         if skills_summary:
-            prompt_parts.append(f"### Standard Operating Procedures & Skills:\n{skills_summary}")
+            parts.append(f"### Standard Operating Procedures & Skills:\n{skills_summary}")
 
-        return "\n\n".join(prompt_parts)
+        return "\n\n".join(parts)
 
     async def execute(self, prompt: str, *, context: dict[str, Any] | None = None) -> AgentResult:
-        """Route to specialized agent or execute directly using Gemini LLM."""
-        delegate = await self._select_delegate_agent(prompt, context=context)
+        """Execute user prompt with native tool calling loop and grounded answer synthesis."""
+        logger.info("orchestrator_execute", prompt_preview=prompt[:80])
+        tools = self._get_available_mcp_tools()
+        system_prompt = self._build_system_prompt(context=context)
+        chat_history: list[dict[str, Any]] = list(context.get("chat_history") or []) if context else []
 
-        if delegate:
-            result = await delegate.execute(prompt, context=context)
-            result.metadata["routed_by"] = self.agent_id
-            return result
-
-        # Direct Orchestrator execution (via Smart Router or LLM client)
-        logger.info("orchestrator_direct_generation", prompt_preview=prompt[:80])
         generate_kwargs: dict[str, Any] = {
             "prompt": prompt,
-            "system_prompt": self._build_system_prompt(),
+            "system_prompt": system_prompt,
+            "chat_history": chat_history,
+            "tools": tools if tools else None,
+            "context": context,
         }
-        if context is not None:
-            generate_kwargs["context"] = context
-            if "routing_strategy" in context:
-                generate_kwargs["strategy_override"] = context["routing_strategy"]
-            if "chat_history" in context:
-                generate_kwargs["chat_history"] = context["chat_history"]
+        if context and "routing_strategy" in context:
+            generate_kwargs["strategy_override"] = context["routing_strategy"]
 
         response = await self.llm_client.generate(**generate_kwargs)
+        executed_tools: list[dict[str, Any]] = []
+
+        # Native Tool Execution Loop (supports multi-hop / multi-tool workflows)
+        hop = 0
+        while response.tool_calls and hop < 5:
+            hop += 1
+            current_calls = response.tool_calls
+            chat_history.append({"role": "model", "tool_calls": current_calls})
+
+            for tc in current_calls:
+                logger.info("orchestrator_invoking_tool", tool_name=tc.name, arguments=tc.arguments)
+                try:
+                    raw_result = await self._execute_tool(tc.name, tc.arguments)
+                except Exception as e:
+                    raw_result = f"Error executing tool '{tc.name}': {e!s}"
+
+                executed_tools.append({
+                    "tool_name": tc.name,
+                    "arguments": tc.arguments,
+                    "result": raw_result,
+                })
+
+                chat_history.append({
+                    "role": "tool",
+                    "name": tc.name,
+                    "tool_call_id": tc.id,
+                    "content": raw_result,
+                })
+
+            response = await self.llm_client.generate(
+                prompt="",
+                system_prompt=system_prompt,
+                chat_history=chat_history,
+                tools=tools if tools else None,
+                context=context,
+            )
 
         exec_metadata = {
             "provider": response.provider,
@@ -154,6 +138,7 @@ class OrchestratorAgent(BaseAgent):
             "usage": response.usage,
             "latency_ms": response.latency_ms,
             "routed_to": response.metadata.get("routed_to"),
+            "executed_tools": executed_tools,
         }
         exec_metadata.update(response.metadata)
 
@@ -167,25 +152,62 @@ class OrchestratorAgent(BaseAgent):
     async def stream(
         self, prompt: str, *, context: dict[str, Any] | None = None
     ) -> AsyncGenerator[str, None]:
-        """Route and stream from delegate agent or stream directly from Smart Router LLM."""
-        delegate = await self._select_delegate_agent(prompt, context=context)
+        """Stream response with native tool execution and token generation."""
+        tools = self._get_available_mcp_tools()
+        system_prompt = self._build_system_prompt(context=context)
+        chat_history: list[dict[str, Any]] = list(context.get("chat_history") or []) if context else []
 
-        if delegate:
-            async for token in delegate.stream(prompt, context=context):
-                yield token
-            return
+        # If tools exist, check if native tool calling is triggered
+        if tools:
+            generate_kwargs: dict[str, Any] = {
+                "prompt": prompt,
+                "system_prompt": system_prompt,
+                "chat_history": chat_history,
+                "tools": tools,
+                "context": context,
+            }
+            if context and "routing_strategy" in context:
+                generate_kwargs["strategy_override"] = context["routing_strategy"]
 
-        logger.info("orchestrator_direct_streaming", prompt_preview=prompt[:80])
-        stream_kwargs: dict[str, Any] = {
+            response = await self.llm_client.generate(**generate_kwargs)
+
+            # If tool calls are requested, execute them first before streaming synthesis
+            if response.tool_calls:
+                chat_history.append({"role": "model", "tool_calls": response.tool_calls})
+                for tc in response.tool_calls:
+                    logger.info("orchestrator_streaming_invoking_tool", tool_name=tc.name, arguments=tc.arguments)
+                    try:
+                        raw_result = await self._execute_tool(tc.name, tc.arguments)
+                    except Exception as e:
+                        raw_result = f"Error executing tool '{tc.name}': {e!s}"
+
+                    chat_history.append({
+                        "role": "tool",
+                        "name": tc.name,
+                        "tool_call_id": tc.id,
+                        "content": raw_result,
+                    })
+
+                # Stream synthesis from tool results
+                stream_kwargs: dict[str, Any] = {
+                    "prompt": "",
+                    "system_prompt": system_prompt,
+                    "chat_history": chat_history,
+                    "context": context,
+                }
+                async for token in self.llm_client.stream(**stream_kwargs):
+                    yield token
+                return
+
+        # Direct streaming without tool calls
+        stream_kwargs = {
             "prompt": prompt,
-            "system_prompt": self._build_system_prompt(),
+            "system_prompt": system_prompt,
+            "chat_history": chat_history,
+            "context": context,
         }
-        if context is not None:
-            stream_kwargs["context"] = context
-            if "routing_strategy" in context:
-                stream_kwargs["strategy_override"] = context["routing_strategy"]
-            if "chat_history" in context:
-                stream_kwargs["chat_history"] = context["chat_history"]
+        if context and "routing_strategy" in context:
+            stream_kwargs["strategy_override"] = context["routing_strategy"]
 
         async for token in self.llm_client.stream(**stream_kwargs):
             yield token

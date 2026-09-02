@@ -7,6 +7,15 @@ from typing import Any
 
 
 @dataclass
+class ToolCall:
+    """Standardized representation of a tool/function call requested by an LLM."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class LLMResponse:
     """Standardized response container returned by all LLM client calls."""
 
@@ -16,6 +25,7 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
     latency_ms: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
 
 class BaseLLMClient(ABC):
@@ -29,9 +39,10 @@ class BaseLLMClient(ABC):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
         context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
@@ -44,9 +55,10 @@ class BaseLLMClient(ABC):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
         context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncGenerator[str, None]:

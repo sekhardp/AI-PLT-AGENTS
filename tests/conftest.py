@@ -28,21 +28,24 @@ class MockLLMClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
         context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        # Check if the prompt was for tool argument extraction
-        if system_prompt and "parameter extractor" in system_prompt.lower():
-            content = json.dumps({"query": "SELECT * FROM dataset", "limit": 10})
-        elif system_prompt and "routing dispatcher" in system_prompt.lower():
-            if "weather" in prompt.lower():
-                content = json.dumps({"selected_agent_id": "mcp-get_weather", "reason": "weather_query"})
-            else:
-                content = json.dumps({"selected_agent_id": None, "reason": "general_query"})
-        elif system_prompt and "intelligent ai router" in system_prompt.lower():
+        from app.clients.base import ToolCall
+
+        tool_calls: list[ToolCall] = []
+        # If tools are available and this is the first turn (no tool responses yet in chat_history)
+        if tools and not any(m.get("role") == "tool" for m in (chat_history or [])):
+            if "weather" in prompt.lower() or "weather" in str(system_prompt).lower():
+                tool_calls = [
+                    ToolCall(id="call_1", name="get_weather", arguments={"latitude": 37.7, "longitude": -122.4})
+                ]
+
+        if system_prompt and "intelligent ai router" in system_prompt.lower():
             if self.fixed_response.strip().startswith("{"):
                 content = self.fixed_response
             elif any(w in prompt.lower() for w in ("complex", "consensus", "proof", "architect", "distributed", "race")):
@@ -60,6 +63,7 @@ class MockLLMClient(BaseLLMClient):
             provider=self.provider_name,
             usage={"prompt_tokens": 10, "completion_tokens": 15, "total_tokens": 25},
             latency_ms=12.5,
+            tool_calls=tool_calls,
         )
 
     async def stream(

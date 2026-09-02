@@ -44,11 +44,13 @@ class SmartRouterClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
         strategy_override: str | None = None,
         context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         """Dynamically routes generate request to Local LLM or Frontier Gemini with automatic fallback."""
         history = chat_history or (context.get("chat_history") if context else None)
@@ -73,6 +75,8 @@ class SmartRouterClient(BaseLLMClient):
                     chat_history=history,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    tools=tools,
+                    context=context,
                 )
                 self.router.record_local_success()
                 response.metadata.update(
@@ -101,6 +105,8 @@ class SmartRouterClient(BaseLLMClient):
                     chat_history=history,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    tools=tools,
+                    context=context,
                 )
                 fallback_resp.metadata.update(
                     {
@@ -121,6 +127,8 @@ class SmartRouterClient(BaseLLMClient):
             chat_history=history,
             temperature=temperature,
             max_tokens=max_tokens,
+            tools=tools,
+            context=context,
         )
         response.metadata.update(
             {
@@ -138,11 +146,13 @@ class SmartRouterClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
         strategy_override: str | None = None,
         context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
         """Stream completion tokens dynamically from Local LLM or Frontier Gemini."""
         history = chat_history or (context.get("chat_history") if context else None)
@@ -178,10 +188,10 @@ class SmartRouterClient(BaseLLMClient):
                     chat_history=history,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    tools=tools,
                     context=context,
                 ):
                     yield token
-                self.router.record_local_success()
                 return
             except Exception as e:
                 self.router.record_local_failure(e)
@@ -191,11 +201,12 @@ class SmartRouterClient(BaseLLMClient):
                 logger.warning(
                     "smart_router_stream_fallback_to_frontier",
                     local_error=str(e),
+                    prompt_preview=prompt[:60],
                 )
                 if context is not None:
+                    context["fallback_triggered"] = True
                     context["routed_to"] = "frontier"
                     context["model"] = getattr(self.frontier_client, "model_name", "gemini-2.5-flash")
-                    context["fallback_triggered"] = True
 
                 async for token in self.frontier_client.stream(
                     prompt,
@@ -203,6 +214,7 @@ class SmartRouterClient(BaseLLMClient):
                     chat_history=history,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    tools=tools,
                     context=context,
                 ):
                     yield token
@@ -215,6 +227,7 @@ class SmartRouterClient(BaseLLMClient):
             chat_history=history,
             temperature=temperature,
             max_tokens=max_tokens,
+            tools=tools,
             context=context,
         ):
             yield token

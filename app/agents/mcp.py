@@ -45,99 +45,70 @@ class MCPAgent(BaseAgent):
             return f"\n\n### Attached Skill Workflow & SOP ({skill['name']}):\n{skill['body']}\n"
         return ""
 
-    async def _extract_tool_arguments(
-        self, prompt: str, *, context: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Uses real LLM to extract JSON arguments from user prompt and context matching the tool's JSON schema and skill rules."""
-        skill_prompt = self._get_skill_instructions()
-        extraction_system_prompt = (
-            f"You are a structured parameter extractor for the tool '{self.tool_name}'.\n"
-            f"Tool Description: {self.description}\n"
-            f"Tool JSON Schema:\n{json.dumps(self.tool_schema, indent=2)}\n"
-            f"{skill_prompt}\n"
-            "Analyze the user query and preceding conversation to extract the exact tool arguments.\n"
-            "Output ONLY a valid JSON object representing the tool arguments.\n"
-            "Do not include markdown codeblocks or explanation. Output valid JSON only."
-        )
-
-        chat_history = context.get("chat_history") if context else None
-
-        resp = await self.llm_client.generate(
-            prompt=prompt,
-            system_prompt=extraction_system_prompt,
-            chat_history=chat_history,
-            temperature=0.1,
-        )
-
-        cleaned_text = resp.content.strip()
-        if cleaned_text.startswith("```"):
-            lines = cleaned_text.splitlines()
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            cleaned_text = "\n".join(lines).strip()
-
-        extracted_args: dict[str, Any] = {}
-        try:
-            extracted_args = json.loads(cleaned_text)
-            if not isinstance(extracted_args, dict):
-                extracted_args = {}
-        except Exception as e:
-            logger.warning(
-                "mcp_argument_json_parse_failed",
-                tool_name=self.tool_name,
-                raw=cleaned_text,
-                error=str(e),
-            )
-            extracted_args = {}
-
-        # Fallback / inject contextual fields if missing
-        if context:
-            if "user_id" in context and "user_id" not in extracted_args:
-                extracted_args["user_id"] = context["user_id"]
-            if "document_ids" in context and not extracted_args.get("document_ids"):
-                extracted_args["document_ids"] = context["document_ids"]
-
-        return extracted_args
-
     async def execute(self, prompt: str, *, context: dict[str, Any] | None = None) -> AgentResult:
-        """Extract arguments, execute MCP tool against registry gateway, and synthesize final answer with grounding rules."""
+        """Execute MCP tool invocation using native function calling and synthesis."""
         logger.info("mcp_agent_execute", agent_id=self.agent_id, tool_name=self.tool_name)
 
-        arguments = await self._extract_tool_arguments(prompt, context=context)
-
-        try:
-            raw_tool_result = await self.mcp_client.call_tool(self.tool_name, arguments)
-        except Exception as e:
-            logger.error("mcp_tool_execution_error", tool_name=self.tool_name, error=str(e))
-            return AgentResult(
-                content=f"Error executing tool '{self.tool_name}': {e!s}",
-                agent_id=self.agent_id,
-                agent_name=self.name,
-                metadata={"error": str(e), "tool_name": self.tool_name, "arguments": arguments},
-            )
+        chat_history: list[dict[str, Any]] = list(context.get("chat_history") or []) if context else []
+        tool_def = [{
+            "name": self.tool_name,
+            "description": self.description,
+            "input_schema": self.tool_schema,
+        }]
 
         skill_prompt = self._get_skill_instructions()
-        synthesis_prompt = (
-            f"User Prompt: {prompt}\n\n"
-            f"Tool '{self.tool_name}' Output:\n{raw_tool_result}\n\n"
-            f"{skill_prompt}\n"
-            "Please provide a clear, helpful, and comprehensive response answering the user query based on the tool results. "
-            "Follow any grounding and citation instructions specified in the attached skill."
-        )
+        system_prompt = f"You are a specialized agent for tool '{self.tool_name}'. {skill_prompt}".strip()
 
-        chat_history = context.get("chat_history") if context else None
-
-        response = await self.llm_client.generate(
-            prompt=synthesis_prompt,
-            system_prompt="You are an expert AI assistant providing insights, grounded answers, and summarizing tool results accurately.",
+        # Step 1: Native tool call determination by LLM
+        resp = await self.llm_client.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
             chat_history=chat_history,
-            temperature=0.7,
+            tools=tool_def,
+            context=context,
         )
+
+        arguments: dict[str, Any] = {}
+        raw_tool_result = ""
+
+        if resp.tool_calls:
+            arguments = resp.tool_calls[0].arguments
+            try:
+                raw_tool_result = await self.mcp_client.call_tool(self.tool_name, arguments)
+            except Exception as e:
+                logger.error("mcp_tool_execution_error", tool_name=self.tool_name, error=str(e))
+                return AgentResult(
+                    content=f"Error executing tool '{self.tool_name}': {e!s}",
+                    agent_id=self.agent_id,
+                    agent_name=self.name,
+                    metadata={"error": str(e), "tool_name": self.tool_name, "arguments": arguments},
+                )
+
+            chat_history.append({"role": "model", "tool_calls": resp.tool_calls})
+            chat_history.append({
+                "role": "tool",
+                "name": self.tool_name,
+                "tool_call_id": resp.tool_calls[0].id,
+                "content": raw_tool_result,
+            })
+
+            # Step 2: Grounded synthesis turn
+            synthesis_resp = await self.llm_client.generate(
+                prompt="",
+                system_prompt="You are an expert AI assistant providing insights, grounded answers, and summarizing tool results accurately.",
+                chat_history=chat_history,
+                context=context,
+            )
+            final_content = synthesis_resp.content
+            model_name = synthesis_resp.model
+            usage = synthesis_resp.usage
+        else:
+            final_content = resp.content
+            model_name = resp.model
+            usage = resp.usage
 
         return AgentResult(
-            content=response.content,
+            content=final_content,
             agent_id=self.agent_id,
             agent_name=self.name,
             metadata={
@@ -145,8 +116,8 @@ class MCPAgent(BaseAgent):
                 "arguments": arguments,
                 "raw_result": raw_tool_result,
                 "provider": self.llm_client.provider_name,
-                "model": response.model,
-                "usage": response.usage,
+                "model": model_name,
+                "usage": usage,
             },
         )
 
@@ -154,30 +125,5 @@ class MCPAgent(BaseAgent):
         self, prompt: str, *, context: dict[str, Any] | None = None
     ) -> AsyncGenerator[str, None]:
         """Stream synthesized answer from tool execution respecting skill citation rules."""
-        arguments = await self._extract_tool_arguments(prompt, context=context)
-
-        try:
-            raw_tool_result = await self.mcp_client.call_tool(self.tool_name, arguments)
-        except Exception as e:
-            yield f"Error executing tool '{self.tool_name}': {e!s}"
-            return
-
-        skill_prompt = self._get_skill_instructions()
-        synthesis_prompt = (
-            f"User Prompt: {prompt}\n\n"
-            f"Tool '{self.tool_name}' Output:\n{raw_tool_result}\n\n"
-            f"{skill_prompt}\n"
-            "Please provide a clear, helpful, and comprehensive response answering the user query based on the tool results. "
-            "Follow any grounding and citation instructions specified in the attached skill."
-        )
-
-        chat_history = context.get("chat_history") if context else None
-
-        async for token in self.llm_client.stream(
-            prompt=synthesis_prompt,
-            system_prompt="You are an expert AI assistant summarizing tool results with strict grounding and citations.",
-            chat_history=chat_history,
-            temperature=0.7,
-            context=context,
-        ):
-            yield token
+        result = await self.execute(prompt, context=context)
+        yield result.content

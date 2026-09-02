@@ -8,7 +8,7 @@ import structlog
 from google import genai
 from google.genai import types
 
-from app.clients.base import BaseLLMClient, LLMResponse
+from app.clients.base import BaseLLMClient, LLMResponse, ToolCall
 
 logger = structlog.get_logger(__name__)
 
@@ -76,31 +76,64 @@ class GeminiClient(BaseLLMClient):
             model_name=model_name,
         )
 
+    def _build_tools(self, tools: list[dict[str, Any]] | None) -> list[types.Tool] | None:
+        """Convert MCP JSON schemas to Gemini Tool declarations."""
+        if not tools:
+            return None
+        declarations = []
+        for t in tools:
+            schema = t.get("input_schema") or t.get("parameters") or {}
+            declarations.append(
+                types.FunctionDeclaration(
+                    name=t["name"],
+                    description=t.get("description", ""),
+                    parameters=schema if schema else None,
+                )
+            )
+        return [types.Tool(function_declarations=declarations)]
+
     def _build_contents(
         self,
-        prompt: str,
-        chat_history: list[dict[str, str]] | None = None,
+        prompt: str | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
     ) -> list[types.Content] | str:
         if not chat_history:
-            return prompt
+            return prompt or ""
 
         contents: list[types.Content] = []
         for m in chat_history:
-            role = "user" if m.get("role") == "user" else "model"
-            content_text = m.get("content", "")
-            if content_text:
-                contents.append(
-                    types.Content(
-                        role=role,
-                        parts=[types.Part.from_text(text=content_text)],
-                    )
+            role = "user" if m.get("role") in ("user", "human") else "model"
+            parts: list[types.Part] = []
+
+            # 1. Model emitted tool calls
+            if m.get("tool_calls"):
+                for tc in m["tool_calls"]:
+                    name = tc.name if hasattr(tc, "name") else tc.get("name")
+                    args = tc.arguments if hasattr(tc, "arguments") else tc.get("arguments", {})
+                    parts.append(types.Part.from_function_call(name=name, args=args))
+                role = "model"
+            # 2. Tool response back to model
+            elif m.get("role") == "tool" or m.get("type") == "tool_response":
+                tool_name = m.get("name") or "tool"
+                res = m.get("content") or m.get("response") or {}
+                if isinstance(res, str):
+                    res = {"output": res}
+                parts.append(types.Part.from_function_response(name=tool_name, response=res))
+                role = "user"
+            # 3. Standard text content
+            elif m.get("content"):
+                parts.append(types.Part.from_text(text=m["content"]))
+
+            if parts:
+                contents.append(types.Content(role=role, parts=parts))
+
+        if prompt:
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=prompt)],
                 )
-        contents.append(
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=prompt)],
             )
-        )
         return contents
 
     async def generate(
@@ -108,11 +141,14 @@ class GeminiClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> LLMResponse:
-        """Generate full completion using Gemini on Vertex AI."""
+        """Generate full completion or function calls using Gemini on Vertex AI."""
         temp = temperature if temperature is not None else self.default_temperature
         max_tok = max_tokens if max_tokens is not None else self.default_max_tokens
 
@@ -120,6 +156,7 @@ class GeminiClient(BaseLLMClient):
             temperature=temp,
             max_output_tokens=max_tok,
             system_instruction=system_prompt if system_prompt else None,
+            tools=self._build_tools(tools),
         )
 
         start = time.perf_counter()
@@ -136,11 +173,25 @@ class GeminiClient(BaseLLMClient):
 
         content = response.text or ""
 
+        # Extract native function calls if emitted by Gemini
+        tool_calls: list[ToolCall] = []
+        if hasattr(response, "function_calls") and response.function_calls:
+            for fc in response.function_calls:
+                args = dict(fc.args) if hasattr(fc, "args") and fc.args else {}
+                tool_calls.append(
+                    ToolCall(
+                        id=getattr(fc, "id", fc.name) or fc.name,
+                        name=fc.name,
+                        arguments=args,
+                    )
+                )
+
         logger.info(
             "gemini_generate_completed",
             model=self.model_name,
             latency_ms=round(latency_ms, 1),
             total_tokens=usage.get("total_tokens", 0),
+            tool_calls_count=len(tool_calls),
         )
 
         return LLMResponse(
@@ -149,6 +200,7 @@ class GeminiClient(BaseLLMClient):
             provider=self.provider_name,
             usage=usage,
             latency_ms=latency_ms,
+            tool_calls=tool_calls,
         )
 
     async def stream(
@@ -156,10 +208,12 @@ class GeminiClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, str]] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
         context: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
         """Stream tokens asynchronously from Gemini on Vertex AI and capture exact model usage."""
         temp = temperature if temperature is not None else self.default_temperature
@@ -169,6 +223,7 @@ class GeminiClient(BaseLLMClient):
             temperature=temp,
             max_output_tokens=max_tok,
             system_instruction=system_prompt if system_prompt else None,
+            tools=self._build_tools(tools),
         )
 
         stream_response = await self._client.aio.models.generate_content_stream(

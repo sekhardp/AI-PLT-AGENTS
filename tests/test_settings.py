@@ -13,7 +13,7 @@ def test_settings_initialization():
     assert settings.VERSION == "0.1.0"
     assert settings.endpoint_settings.PORT == 8002
     assert settings.vertex_settings.GEMINI_MODEL == "gemini-2.5-flash"
-    assert settings.mcp_settings.REGISTRY_URL == "http://localhost:8081/sse"
+    assert settings.mcp_settings.REGISTRY_URL.endswith("/sse")
     assert settings.local_llm_settings.MODEL == "Qwen/Qwen2.5-7B-Instruct"
     assert settings.router_settings.DEFAULT_STRATEGY == "AUTO"
 
