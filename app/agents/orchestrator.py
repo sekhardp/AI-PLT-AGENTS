@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-import json
+import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import structlog
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 
-from app.agents.base import AgentResult, BaseAgent
+from app.agents.base import AgentResult, BaseAgent, extract_usage_dict, resolve_pydantic_model
+from app.agents.deps import AgentDeps
+from app.agents.mcp_tools import build_mcp_tools_from_definitions
 from app.agents.registry import AgentRegistry
 from app.clients.base import BaseLLMClient
-from app.core.skills import skill_registry
 
 logger = structlog.get_logger(__name__)
 
@@ -21,7 +24,7 @@ When specialized tools or domain agents are registered, evaluate whether the use
 
 
 class OrchestratorAgent(BaseAgent):
-    """Production Master Orchestrator Agent powered by native Model Context Protocol (MCP) tool execution."""
+    """Production Master Orchestrator Agent powered by Pydantic AI and MCP tool orchestration."""
 
     def __init__(self, registry: AgentRegistry, llm_client: BaseLLMClient) -> None:
         super().__init__(
@@ -33,12 +36,44 @@ class OrchestratorAgent(BaseAgent):
         self.registry = registry
         self.llm_client = llm_client
 
+    def _build_pydantic_agent(self, dynamic_tools: list[Any]) -> Agent[AgentDeps, str]:
+        """Construct a configured Pydantic AI Agent instance with dynamic MCP tools and system prompts."""
+        agent = Agent[AgentDeps, str](
+            deps_type=AgentDeps,
+            tools=dynamic_tools,
+            retries=2,
+        )
+
+        @agent.system_prompt
+        async def _system_prompt_builder(ctx: RunContext[AgentDeps]) -> str:
+            parts = [ORCHESTRATOR_SYSTEM_PROMPT]
+
+            ctx_items = []
+            if ctx.deps.document_ids:
+                ctx_items.append(f"- Active Document IDs: {ctx.deps.document_ids}")
+            if ctx.deps.user_id:
+                ctx_items.append(f"- User ID: {ctx.deps.user_id}")
+            if ctx.deps.session_context:
+                for k, v in ctx.deps.session_context.items():
+                    if k not in ("chat_history", "routing_strategy", "document_id", "document_ids", "user_id"):
+                        ctx_items.append(f"- {k}: {v}")
+            if ctx_items:
+                parts.append("### Current Session Context:\n" + "\n".join(ctx_items))
+
+            skills_summary = ctx.deps.skill_registry.get_all_skills_instructions()
+            if skills_summary:
+                parts.append(f"### Standard Operating Procedures & Skills:\n{skills_summary}")
+
+            return "\n\n".join(parts)
+
+        return agent
+
     def _get_available_mcp_tools(self) -> list[dict[str, Any]]:
         """Retrieve all discovered MCP tool schemas from registered agents."""
         tools: list[dict[str, Any]] = []
         for a in self.registry.list_agents():
             if a.agent_id != self.agent_id:
-                tool_name = getattr(a, "tool_name", None) or a.capabilities[0]
+                tool_name = getattr(a, "tool_name", None) or (a.capabilities[0] if a.capabilities else "mcp-tool")
                 tool_schema = getattr(a, "tool_schema", None) or {}
                 tools.append({
                     "name": tool_name,
@@ -47,176 +82,119 @@ class OrchestratorAgent(BaseAgent):
                 })
         return tools
 
-    async def _execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
-        """Execute a tool against the registered MCP client."""
+    def _get_mcp_client(self) -> Any:
+        """Find the active MCP registry client from registered agents."""
         for a in self.registry.list_agents():
-            if getattr(a, "tool_name", None) == tool_name or a.agent_id == f"mcp-{tool_name}":
-                mcp_client = getattr(a, "mcp_client", None)
-                if mcp_client:
-                    return await mcp_client.call_tool(tool_name, arguments)
-        return f"Error: Tool '{tool_name}' not found."
-
-    def _build_system_prompt(self, context: dict[str, Any] | None = None) -> str:
-        """Dynamically construct system prompt including user context, currently registered skills and operating guidelines."""
-        parts = [ORCHESTRATOR_SYSTEM_PROMPT]
-
-        if context:
-            ctx_items = []
-            if "document_id" in context:
-                ctx_items.append(f"- Active Document ID: {context['document_id']}")
-            elif "document_ids" in context:
-                ctx_items.append(f"- Active Document IDs: {context['document_ids']}")
-            if "user_id" in context:
-                ctx_items.append(f"- User ID: {context['user_id']}")
-            if ctx_items:
-                parts.append("### Current Session Context:\n" + "\n".join(ctx_items))
-
-        skills_summary = skill_registry.get_all_skills_instructions()
-        if skills_summary:
-            parts.append(f"### Standard Operating Procedures & Skills:\n{skills_summary}")
-
-        return "\n\n".join(parts)
+            client = getattr(a, "mcp_client", None)
+            if client:
+                return client
+        return None
 
     async def execute(self, prompt: str, *, context: dict[str, Any] | None = None) -> AgentResult:
-        """Execute user prompt with native tool calling loop and grounded answer synthesis."""
-        logger.info("orchestrator_execute", prompt_preview=prompt[:80])
-        tools = self._get_available_mcp_tools()
-        system_prompt = self._build_system_prompt(context=context)
-        chat_history: list[dict[str, Any]] = list(context.get("chat_history") or []) if context else []
+        """Execute user prompt with Pydantic AI agent loop and dynamic MCP tools."""
+        logger.info("pydantic_ai_orchestrator_execute", prompt_preview=prompt[:80])
+        start_time = time.perf_counter()
 
-        generate_kwargs: dict[str, Any] = {
-            "prompt": prompt,
-            "system_prompt": system_prompt,
-            "chat_history": chat_history,
-            "tools": tools if tools else None,
-            "context": context,
-        }
-        if context and "routing_strategy" in context:
-            generate_kwargs["strategy_override"] = context["routing_strategy"]
+        target: str | None = None
+        routing_reason: str | None = None
+        complexity_score: float | None = None
+        routing_strategy: str | None = context.get("routing_strategy") if context else None
 
-        response = await self.llm_client.generate(**generate_kwargs)
-        executed_tools: list[dict[str, Any]] = []
+        if hasattr(self.llm_client, "classify"):
+            decision = self.llm_client.classify(prompt, strategy_override=routing_strategy, context=context)
+            target = decision.target
+            routing_reason = decision.reason
+            complexity_score = decision.complexity_score
+            routing_strategy = getattr(decision.strategy, "value", str(decision.strategy))
 
-        # Native Tool Execution Loop (supports multi-hop / multi-tool workflows)
-        hop = 0
-        while response.tool_calls and hop < 5:
-            hop += 1
-            current_calls = response.tool_calls
-            chat_history.append({"role": "model", "tool_calls": current_calls})
+        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt)
+        deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context)
+        tool_defs = self._get_available_mcp_tools()
+        dynamic_tools = build_mcp_tools_from_definitions(tool_defs)
+        agent = self._build_pydantic_agent(dynamic_tools)
 
-            responses: list[dict[str, Any]] = []
-            for tc in current_calls:
-                logger.info("orchestrator_invoking_tool", tool_name=tc.name, arguments=tc.arguments)
-                try:
-                    raw_result = await self._execute_tool(tc.name, tc.arguments)
-                except Exception as e:
-                    raw_result = f"Error executing tool '{tc.name}': {e!s}"
-
-                executed_tools.append({
-                    "tool_name": tc.name,
-                    "arguments": tc.arguments,
-                    "result": raw_result,
-                })
-                responses.append({
-                    "name": tc.name,
-                    "tool_call_id": tc.id,
-                    "content": raw_result,
-                })
-
-            chat_history.append({
-                "role": "tool",
-                "responses": responses,
-            })
-
-            response = await self.llm_client.generate(
-                prompt="",
-                system_prompt=system_prompt,
-                chat_history=chat_history,
-                tools=tools if tools else None,
-                context=context,
+        try:
+            result = await agent.run(
+                prompt,
+                deps=deps,
+                model=model,
             )
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            usage_dict = extract_usage_dict(result.usage)
 
-        exec_metadata = {
-            "provider": response.provider,
-            "model": response.model,
-            "usage": response.usage,
-            "latency_ms": response.latency_ms,
-            "routed_to": response.metadata.get("routed_to"),
-            "executed_tools": executed_tools,
-        }
-        exec_metadata.update(response.metadata)
+            # Extract executed tools from all messages
+            executed_tools: list[dict[str, Any]] = []
+            for m in result.all_messages():
+                for p in getattr(m, "parts", []):
+                    if isinstance(p, ToolCallPart):
+                        executed_tools.append({
+                            "tool_name": p.tool_name,
+                            "arguments": p.args if isinstance(p.args, dict) else {},
+                        })
+                    elif isinstance(p, ToolReturnPart):
+                        if executed_tools and executed_tools[-1].get("tool_name") == p.tool_name:
+                            executed_tools[-1]["result"] = str(p.content)
 
-        return AgentResult(
-            content=response.content,
-            agent_id=self.agent_id,
-            agent_name=self.name,
-            metadata=exec_metadata,
-        )
+            model_name = getattr(model, "model_name", "pydantic-ai-model")
+            metadata: dict[str, Any] = {
+                "provider": getattr(self.llm_client, "provider_name", "pydantic_ai"),
+                "model": model_name,
+                "usage": usage_dict,
+                "latency_ms": round(latency_ms, 1),
+                "routed_to": target,
+                "routing_reason": routing_reason,
+                "complexity_score": complexity_score,
+                "executed_tools": executed_tools,
+            }
+            if routing_strategy:
+                metadata["routing_strategy"] = routing_strategy
+            if context:
+                for k, v in context.items():
+                    if k not in metadata:
+                        metadata[k] = v
+
+            return AgentResult(
+                content=result.output,
+                agent_id=self.agent_id,
+                agent_name=self.name,
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.error("pydantic_ai_orchestrator_run_failed", error=str(e))
+            raise
 
     async def stream(
         self, prompt: str, *, context: dict[str, Any] | None = None
     ) -> AsyncGenerator[str, None]:
-        """Stream response with native tool execution and token generation."""
-        tools = self._get_available_mcp_tools()
-        system_prompt = self._build_system_prompt(context=context)
-        chat_history: list[dict[str, Any]] = list(context.get("chat_history") or []) if context else []
+        """Stream completion tokens dynamically using Pydantic AI run_stream."""
+        target: str | None = None
+        if hasattr(self.llm_client, "classify"):
+            strategy_override = context.get("routing_strategy") if context else None
+            decision = self.llm_client.classify(prompt, strategy_override=strategy_override, context=context)
+            target = decision.target
+            if context is not None:
+                context["routed_to"] = target
+                context["routing_reason"] = decision.reason
 
-        # If tools exist, check if native tool calling is triggered
-        if tools:
-            generate_kwargs: dict[str, Any] = {
-                "prompt": prompt,
-                "system_prompt": system_prompt,
-                "chat_history": chat_history,
-                "tools": tools,
-                "context": context,
-            }
-            if context and "routing_strategy" in context:
-                generate_kwargs["strategy_override"] = context["routing_strategy"]
+        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt)
+        deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context)
+        tool_defs = self._get_available_mcp_tools()
+        dynamic_tools = build_mcp_tools_from_definitions(tool_defs)
+        agent = self._build_pydantic_agent(dynamic_tools)
 
-            response = await self.llm_client.generate(**generate_kwargs)
-
-            # If tool calls are requested, execute them first before streaming synthesis
-            if response.tool_calls:
-                chat_history.append({"role": "model", "tool_calls": response.tool_calls})
-                responses: list[dict[str, Any]] = []
-                for tc in response.tool_calls:
-                    logger.info("orchestrator_streaming_invoking_tool", tool_name=tc.name, arguments=tc.arguments)
-                    try:
-                        raw_result = await self._execute_tool(tc.name, tc.arguments)
-                    except Exception as e:
-                        raw_result = f"Error executing tool '{tc.name}': {e!s}"
-
-                    responses.append({
-                        "name": tc.name,
-                        "tool_call_id": tc.id,
-                        "content": raw_result,
-                    })
-
-                chat_history.append({
-                    "role": "tool",
-                    "responses": responses,
-                })
-
-                # Stream synthesis from tool results
-                stream_kwargs: dict[str, Any] = {
-                    "prompt": "",
-                    "system_prompt": system_prompt,
-                    "chat_history": chat_history,
-                    "context": context,
-                }
-                async for token in self.llm_client.stream(**stream_kwargs):
+        try:
+            async with agent.run_stream(
+                prompt,
+                deps=deps,
+                model=model,
+            ) as stream_result:
+                async for token in stream_result.stream_text(delta=True):
                     yield token
-                return
 
-        # Direct streaming without tool calls
-        stream_kwargs = {
-            "prompt": prompt,
-            "system_prompt": system_prompt,
-            "chat_history": chat_history,
-            "context": context,
-        }
-        if context and "routing_strategy" in context:
-            stream_kwargs["strategy_override"] = context["routing_strategy"]
+                if context is not None:
+                    context["usage"] = extract_usage_dict(stream_result.usage)
+        except Exception as e:
+            logger.warning("pydantic_ai_stream_failed_falling_back", error=str(e))
+            async for token in self.llm_client.stream(prompt=prompt, context=context):
+                yield token
 
-        async for token in self.llm_client.stream(**stream_kwargs):
-            yield token

@@ -6,7 +6,7 @@ from app.api.v1.schemas.health import HealthResponse
 router = APIRouter()
 
 
-def get_registry(request: Request) -> AgentRegistry:
+def get_registry(request: Request) -> AgentRegistry | None:
     return getattr(request.app.state, "registry", None)
 
 

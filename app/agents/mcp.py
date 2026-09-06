@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import json
+import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import structlog
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 
-from app.agents.base import AgentResult, BaseAgent
+from app.agents.base import AgentResult, BaseAgent, extract_usage_dict, resolve_pydantic_model
+from app.agents.deps import AgentDeps
+from app.agents.mcp_tools import create_mcp_tool
 from app.clients.base import BaseLLMClient
 from app.clients.mcp_client import MCPRegistryClient
 from app.core.skills import skill_registry
@@ -15,7 +19,7 @@ logger = structlog.get_logger(__name__)
 
 
 class MCPAgent(BaseAgent):
-    """Dynamic Agent that translates natural language prompts into MCP tool invocations using Gemini and Skill playbooks."""
+    """Dynamic Agent that translates natural language prompts into MCP tool invocations using Pydantic AI and Skill playbooks."""
 
     def __init__(
         self,
@@ -38,88 +42,70 @@ class MCPAgent(BaseAgent):
         self.mcp_client = mcp_client
         self.llm_client = llm_client
 
-    def _get_skill_instructions(self) -> str:
-        """Retrieve attached SKILL.md playbook instructions if available for this tool."""
-        skill = skill_registry.get_skill_for_tool(self.tool_name)
-        if skill and "body" in skill:
-            return f"\n\n### Attached Skill Workflow & SOP ({skill['name']}):\n{skill['body']}\n"
-        return ""
+    def _build_pydantic_agent(self, tool: Any) -> Agent[AgentDeps, str]:
+        agent = Agent[AgentDeps, str](
+            deps_type=AgentDeps,
+            tools=[tool],
+            retries=2,
+        )
+
+        @agent.system_prompt
+        async def _system_prompt_builder(ctx: RunContext[AgentDeps]) -> str:
+            skill = skill_registry.get_skill_for_tool(self.tool_name)
+            skill_text = (
+                f"\n\n### Attached Skill Workflow & SOP ({skill['name']}):\n{skill['body']}\n"
+                if skill and "body" in skill
+                else ""
+            )
+            return f"You are a specialized agent for tool '{self.tool_name}'. {skill_text}".strip()
+
+        return agent
 
     async def execute(self, prompt: str, *, context: dict[str, Any] | None = None) -> AgentResult:
-        """Execute MCP tool invocation using native function calling and synthesis."""
+        """Execute MCP tool invocation using Pydantic AI and synthesis."""
         logger.info("mcp_agent_execute", agent_id=self.agent_id, tool_name=self.tool_name)
+        start_time = time.perf_counter()
 
-        chat_history: list[dict[str, Any]] = list(context.get("chat_history") or []) if context else []
-        tool_def = [{
-            "name": self.tool_name,
-            "description": self.description,
-            "input_schema": self.tool_schema,
-        }]
+        deps = AgentDeps.from_context(mcp_client=self.mcp_client, context=context)
+        tool = create_mcp_tool(self.tool_name, self.description, self.tool_schema)
+        model = resolve_pydantic_model(self.llm_client, prompt=prompt)
+        agent = self._build_pydantic_agent(tool)
 
-        skill_prompt = self._get_skill_instructions()
-        system_prompt = f"You are a specialized agent for tool '{self.tool_name}'. {skill_prompt}".strip()
-
-        # Step 1: Native tool call determination by LLM
-        resp = await self.llm_client.generate(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            chat_history=chat_history,
-            tools=tool_def,
-            context=context,
-        )
-
-        arguments: dict[str, Any] = {}
-        raw_tool_result = ""
-
-        if resp.tool_calls:
-            arguments = resp.tool_calls[0].arguments
-            try:
-                raw_tool_result = await self.mcp_client.call_tool(self.tool_name, arguments)
-            except Exception as e:
-                logger.error("mcp_tool_execution_error", tool_name=self.tool_name, error=str(e))
-                return AgentResult(
-                    content=f"Error executing tool '{self.tool_name}': {e!s}",
-                    agent_id=self.agent_id,
-                    agent_name=self.name,
-                    metadata={"error": str(e), "tool_name": self.tool_name, "arguments": arguments},
-                )
-
-            chat_history.append({"role": "model", "tool_calls": resp.tool_calls})
-            chat_history.append({
-                "role": "tool",
-                "name": self.tool_name,
-                "tool_call_id": resp.tool_calls[0].id,
-                "content": raw_tool_result,
-            })
-
-            # Step 2: Grounded synthesis turn
-            synthesis_resp = await self.llm_client.generate(
-                prompt="",
-                system_prompt="You are an expert AI assistant providing insights, grounded answers, and summarizing tool results accurately.",
-                chat_history=chat_history,
-                context=context,
+        try:
+            result = await agent.run(
+                prompt,
+                deps=deps,
+                model=model,
             )
-            final_content = synthesis_resp.content
-            model_name = synthesis_resp.model
-            usage = synthesis_resp.usage
-        else:
-            final_content = resp.content
-            model_name = resp.model
-            usage = resp.usage
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            usage_dict = extract_usage_dict(result.usage)
 
-        return AgentResult(
-            content=final_content,
-            agent_id=self.agent_id,
-            agent_name=self.name,
-            metadata={
-                "tool_name": self.tool_name,
-                "arguments": arguments,
-                "raw_result": raw_tool_result,
-                "provider": self.llm_client.provider_name,
-                "model": model_name,
-                "usage": usage,
-            },
-        )
+            raw_result = ""
+            arguments: dict[str, Any] = {}
+            for m in result.all_messages():
+                for p in getattr(m, "parts", []):
+                    if isinstance(p, ToolCallPart) and p.tool_name == self.tool_name:
+                        arguments = p.args if isinstance(p.args, dict) else {}
+                    elif isinstance(p, ToolReturnPart) and p.tool_name == self.tool_name:
+                        raw_result = str(p.content)
+
+            return AgentResult(
+                content=result.output,
+                agent_id=self.agent_id,
+                agent_name=self.name,
+                metadata={
+                    "tool_name": self.tool_name,
+                    "arguments": arguments,
+                    "raw_result": raw_result,
+                    "provider": getattr(self.llm_client, "provider_name", "pydantic_ai"),
+                    "model": getattr(model, "model_name", "pydantic-ai-model"),
+                    "usage": usage_dict,
+                    "latency_ms": round(latency_ms, 1),
+                },
+            )
+        except Exception as e:
+            logger.error("mcp_agent_pydantic_run_failed", error=str(e))
+            raise
 
     async def stream(
         self, prompt: str, *, context: dict[str, Any] | None = None
@@ -127,3 +113,4 @@ class MCPAgent(BaseAgent):
         """Stream synthesized answer from tool execution respecting skill citation rules."""
         result = await self.execute(prompt, context=context)
         yield result.content
+

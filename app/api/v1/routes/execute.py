@@ -47,6 +47,7 @@ async def execute_agent(req: ExecuteRequest, request: Request):
         )
         routed_to = decision.target
         complexity_score = decision.complexity_score
+        context["complexity_score"] = complexity_score
         model_name = (
             getattr(local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct")
             if decision.target == "local"
@@ -66,11 +67,7 @@ async def execute_agent(req: ExecuteRequest, request: Request):
             yield f"data: {init_eval_data}\n\n"
 
             sent_decision_event = False
-            token_count = 0
-            accumulated_response: list[str] = []
             async for token in agent.stream(req.prompt, context=context):
-                token_count += 1
-                accumulated_response.append(token)
                 current_routed_to = context.get("routed_to", routed_to or "local")
                 current_model = context.get("model", model_name or "Qwen/Qwen2.5-7B-Instruct")
 
@@ -95,6 +92,7 @@ async def execute_agent(req: ExecuteRequest, request: Request):
                 })
                 yield f"data: {data}\n\n"
                 await asyncio.sleep(0)
+
 
             final_routed_to = context.get("routed_to", routed_to or "frontier")
             final_model = context.get("model", model_name or "gemini-2.5-flash")

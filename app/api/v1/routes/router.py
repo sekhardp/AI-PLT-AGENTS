@@ -90,7 +90,7 @@ async def update_strategy(req: UpdateStrategyRequest, request: Request):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid strategy '{req.strategy}'. Valid options: {valid_options}",
-        )
+        ) from None
 
     ai_router.default_strategy = new_strategy
     if req.complexity_threshold is not None:

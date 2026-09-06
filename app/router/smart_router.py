@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+import contextlib
 import json
-import re
 import time
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, ClassVar
+from enum import StrEnum
+from typing import Any
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
 
-class RoutingStrategy(str, Enum):
+class RoutingStrategy(StrEnum):
     AUTO = "AUTO"
     LOCAL_FIRST = "LOCAL_FIRST"
     FRONTIER_FIRST = "FRONTIER_FIRST"
@@ -29,8 +29,6 @@ class RoutingDecision:
     complexity_score: float
     reason: str
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
 
 
 ROUTER_DECISION_PROMPT = (
@@ -93,6 +91,23 @@ class SmartAIRouter:
                 cooldown_seconds=self._recovery_cooldown_seconds,
             )
 
+    def _resolve_strategy(
+        self,
+        strategy_override: str | RoutingStrategy | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> RoutingStrategy:
+        """Resolve active routing strategy considering overrides and context metadata."""
+        active_strategy = self.default_strategy
+        if strategy_override:
+            with contextlib.suppress(ValueError):
+                active_strategy = RoutingStrategy(str(strategy_override).upper())
+
+        if context and "routing_strategy" in context:
+            with contextlib.suppress(ValueError):
+                active_strategy = RoutingStrategy(str(context["routing_strategy"]).upper())
+
+        return active_strategy
+
     async def decide(
         self,
         prompt: str,
@@ -104,18 +119,7 @@ class SmartAIRouter:
 
         If the Local LLM is unreachable or fails, immediately falls back to Frontier.
         """
-        active_strategy = self.default_strategy
-        if strategy_override:
-            try:
-                active_strategy = RoutingStrategy(str(strategy_override).upper())
-            except ValueError:
-                logger.warning("invalid_strategy_override", strategy=strategy_override)
-
-        if context and "routing_strategy" in context:
-            try:
-                active_strategy = RoutingStrategy(str(context["routing_strategy"]).upper())
-            except ValueError:
-                pass
+        active_strategy = self._resolve_strategy(strategy_override, context)
 
         if active_strategy == RoutingStrategy.LOCAL_ONLY:
             return RoutingDecision(
@@ -200,18 +204,7 @@ class SmartAIRouter:
         context: dict[str, Any] | None = None,
     ) -> RoutingDecision:
         """Lightweight synchronous fallback for offline or quick check."""
-        active_strategy = self.default_strategy
-        if strategy_override:
-            try:
-                active_strategy = RoutingStrategy(str(strategy_override).upper())
-            except ValueError:
-                pass
-
-        if context and "routing_strategy" in context:
-            try:
-                active_strategy = RoutingStrategy(str(context["routing_strategy"]).upper())
-            except ValueError:
-                pass
+        active_strategy = self._resolve_strategy(strategy_override, context)
 
         if active_strategy == RoutingStrategy.LOCAL_ONLY:
             return RoutingDecision(target="local", strategy=active_strategy, complexity_score=0.15, reason="explicit_local_only")
@@ -240,3 +233,4 @@ class SmartAIRouter:
                 "cooldown_active": time.time() < self._circuit_open_until,
             },
         }
+

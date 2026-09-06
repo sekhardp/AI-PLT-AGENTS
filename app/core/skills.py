@@ -1,16 +1,16 @@
-import logging
-import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-logger = logging.getLogger(__name__)
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 
 class SkillRegistry:
     """Discovers, parses, and provides runtime access to SKILL.md playbooks for agents."""
 
-    def __init__(self, skills_dir: Optional[str] = None):
+    def __init__(self, skills_dir: str | None = None):
         if skills_dir:
             self.skills_dir = Path(skills_dir)
         else:
@@ -18,8 +18,8 @@ class SkillRegistry:
             project_root = Path(__file__).resolve().parent.parent.parent
             self.skills_dir = project_root / "skills"
 
-        self._skills: Dict[str, Dict[str, Any]] = {}
-        self._tool_to_skill: Dict[str, str] = {}
+        self._skills: dict[str, dict[str, Any]] = {}
+        self._tool_to_skill: dict[str, str] = {}
         self.reload_skills()
 
     def reload_skills(self) -> None:
@@ -40,9 +40,10 @@ class SkillRegistry:
                     for tool in parsed.get("tools", []):
                         self._tool_to_skill[tool] = skill_name
             except Exception as e:
-                logger.warning("Failed to load skill from %s: %s", skill_file, e)
+                logger.warning("skill_load_failed", file=str(skill_file), error=str(e))
 
-    def _parse_skill_file(self, content: str) -> Optional[dict[str, Any]]:
+
+    def _parse_skill_file(self, content: str) -> dict[str, Any] | None:
         """Parse frontmatter and markdown body of a SKILL.md file."""
         frontmatter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)$", content, re.DOTALL)
         if not frontmatter_match:
@@ -84,7 +85,7 @@ class SkillRegistry:
             "body": body,
         }
 
-    def get_skill_for_tool(self, tool_name: str) -> Optional[dict[str, Any]]:
+    def get_skill_for_tool(self, tool_name: str) -> dict[str, Any] | None:
         """Retrieve the skill specification for a given MCP tool name."""
         skill_name = self._tool_to_skill.get(tool_name)
         if not skill_name and "__" in tool_name:

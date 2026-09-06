@@ -1,8 +1,9 @@
-import logging
 import tomllib
 from pathlib import Path
 
-log = logging.getLogger(__name__)
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,7 +41,8 @@ class Distribution:
             TypeError,
             ValueError,
         ) as e:
-            log.warning("Failed to load distribution info from pyproject.toml: %s", e)
+            logger.warning("distribution_load_failed", error=str(e))
+
 
     @property
     def name(self) -> str:

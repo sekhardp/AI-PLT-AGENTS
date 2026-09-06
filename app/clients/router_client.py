@@ -39,6 +39,25 @@ class SmartRouterClient(BaseLLMClient):
         """Classify a prompt using the underlying SmartAIRouter."""
         return self.router.classify(prompt, strategy_override=strategy_override, context=context)
 
+    def get_pydantic_model(self, target: str = "frontier") -> Any:
+        """Return the appropriate Pydantic AI Model instance for the given target with optional fallback."""
+        if target == "local" and hasattr(self.local_client, "get_pydantic_model"):
+            local_model = self.local_client.get_pydantic_model()
+            if self.router.fallback_enabled and hasattr(self.frontier_client, "get_pydantic_model"):
+                try:
+                    from pydantic_ai.models.fallback import FallbackModel
+
+                    frontier_model = self.frontier_client.get_pydantic_model()
+                    return FallbackModel(local_model, frontier_model)
+                except Exception:
+                    return local_model
+            return local_model
+
+        if hasattr(self.frontier_client, "get_pydantic_model"):
+            return self.frontier_client.get_pydantic_model()
+        return None
+
+
     async def generate(
         self,
         prompt: str,

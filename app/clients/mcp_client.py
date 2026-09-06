@@ -49,11 +49,14 @@ class MCPRegistryClient:
 
                         tools = []
                         for tool in tools_result.tools:
-                            schema = getattr(tool, "input_schema", getattr(tool, "inputSchema", {}))
+                            schema = getattr(tool, "input_schema", None)
+                            if schema is None and hasattr(tool, "inputSchema"):
+                                schema = tool.inputSchema
                             if hasattr(schema, "model_dump"):
                                 schema = schema.model_dump()
                             elif not isinstance(schema, dict):
                                 schema = dict(schema) if schema else {}
+
 
                             tools.append({
                                 "name": tool.name,
@@ -96,4 +99,4 @@ class MCPRegistryClient:
                         return str(result)
         except Exception as e:
             logger.error("mcp_tool_execution_failed", tool_name=tool_name, error=str(e))
-            raise e
+            raise

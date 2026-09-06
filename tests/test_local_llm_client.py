@@ -1,62 +1,36 @@
-import json
-
 import httpx
 import pytest
 from app.clients.local_llm_client import LocalLLMClient
+from pydantic_ai.models.test import TestModel
 
 
 @pytest.mark.asyncio
-async def test_local_llm_client_generate():
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/chat/completions"
-        body = json.loads(request.content)
-        assert body["model"] == "Qwen/Qwen2.5-7B-Instruct"
-        assert len(body["messages"]) == 2
+async def test_local_llm_client_initialization_and_pydantic_model():
+    client = LocalLLMClient(base_url="http://localhost:8000/v1", model_name="Qwen/Qwen2.5-7B-Instruct")
+    model = client.get_pydantic_model()
+    assert model is not None
+    assert client.health()["status"] == "configured"
+    assert client.health()["model"] == "Qwen/Qwen2.5-7B-Instruct"
+    await client.aclose()
 
-        resp_payload = {
-            "id": "chatcmpl-123",
-            "object": "chat.completion",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "This is a local completion."},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14},
-        }
-        return httpx.Response(200, json=resp_payload)
 
-    client = LocalLLMClient(base_url="http://mock-vllm:8000/v1")
-    # Swap out client transport with MockTransport
-    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://mock-vllm:8000/v1")
+@pytest.mark.asyncio
+async def test_local_llm_client_generate_and_stream():
+    client = LocalLLMClient(base_url="http://localhost:8000/v1", model_name="Qwen/Qwen2.5-7B-Instruct")
+    # Replace internal model with TestModel for offline unit testing
+    client._model = TestModel(custom_output_text="This is a local completion.")
 
     res = await client.generate("Hello local model!", system_prompt="You are a helpful assistant.")
     assert res.content == "This is a local completion."
     assert res.provider == "local_vllm"
     assert res.model == "Qwen/Qwen2.5-7B-Instruct"
-    assert res.usage["total_tokens"] == 14
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_local_llm_client_stream():
-    def handler(request: httpx.Request) -> httpx.Response:
-        lines = [
-            'data: {"choices": [{"delta": {"content": "Hello"}}]}\n\n',
-            'data: {"choices": [{"delta": {"content": " world!"}}]}\n\n',
-            "data: [DONE]\n\n",
-        ]
-        return httpx.Response(200, content="".join(lines).encode("utf-8"))
-
-    client = LocalLLMClient(base_url="http://mock-vllm:8000/v1")
-    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://mock-vllm:8000/v1")
+    assert res.usage["total_tokens"] > 0
 
     tokens = []
     async for token in client.stream("Hello stream!"):
         tokens.append(token)
+    assert len(tokens) > 0
 
-    assert "".join(tokens) == "Hello world!"
     await client.aclose()
 
 

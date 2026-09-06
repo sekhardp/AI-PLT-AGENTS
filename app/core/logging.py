@@ -1,13 +1,39 @@
 import logging
 import sys
 
+import logfire
 import structlog
 
 from app.core.settings import app_settings
 
 
+def setup_logfire() -> None:
+    """Configures Pydantic Logfire observability and tracing."""
+    lf_settings = app_settings.logfire_settings
+    send_to_logfire = (
+        lf_settings.SEND_TO_LOGFIRE
+        if lf_settings.SEND_TO_LOGFIRE is not None
+        else ("if-token-present" if lf_settings.TOKEN else False)
+    )
+
+    console_opt = False if (not lf_settings.CONSOLE or app_settings.is_production) else None
+
+    logfire.configure(
+        token=lf_settings.TOKEN,
+        service_name=lf_settings.SERVICE_NAME,
+        service_version=lf_settings.SERVICE_VERSION,
+        environment=lf_settings.ENVIRONMENT or app_settings.ENV,
+        send_to_logfire=send_to_logfire,
+        console=console_opt,
+    )
+    logfire.instrument_pydantic_ai()
+    logfire.instrument_pydantic()
+    logfire.instrument_httpx()
+
+
+
 def setup_logging() -> None:
-    """Configures structured logging for the application."""
+    """Configures structured logging and Logfire for the application."""
     log_level_name = app_settings.logging_settings.LEVEL.upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
 
@@ -16,6 +42,8 @@ def setup_logging() -> None:
         stream=sys.stdout,
         level=log_level,
     )
+
+    setup_logfire()
 
     structlog.configure(
         processors=[

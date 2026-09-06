@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import logfire
 import pytest
 from app.agents.mcp import MCPAgent
 from app.agents.orchestrator import OrchestratorAgent
@@ -12,6 +13,9 @@ from app.clients.base import BaseLLMClient, LLMResponse
 from app.clients.mcp_client import MCPRegistryClient
 from app.core.bootstrap import create_app
 from httpx import ASGITransport, AsyncClient
+
+# Configure logfire in offline mode for clean test runs
+logfire.configure(send_to_logfire=False, console=False)
 
 
 class MockLLMClient(BaseLLMClient):

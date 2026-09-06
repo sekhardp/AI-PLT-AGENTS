@@ -2,6 +2,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import logfire
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -140,12 +141,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    setup_logging()
+
     app = FastAPI(
         title=app_settings.NAME,
         version=app_settings.VERSION,
         description=app_settings.DESCRIPTION,
         lifespan=lifespan,
     )
+
+    # Instrument FastAPI with Logfire for request/response traces
+    logfire.instrument_fastapi(app)
+
 
     # Configure CORS Middleware
     app.add_middleware(

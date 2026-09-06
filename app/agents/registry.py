@@ -1,4 +1,4 @@
-from __future__ import annotations
+from typing import Any
 
 import structlog
 
@@ -49,7 +49,7 @@ class AgentRegistry:
     def count(self) -> int:
         return len(self._agents)
 
-    def health(self) -> dict:
+    def health(self) -> dict[str, Any]:
         """Aggregate health of all registered agents."""
         return {
             "total_agents": self.count,

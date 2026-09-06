@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
 import structlog
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
-from app.clients.base import BaseLLMClient, LLMResponse, ToolCall
+from app.agents.base import extract_usage_dict
+from app.clients.base import BaseLLMClient, LLMResponse
 
 logger = structlog.get_logger(__name__)
+
 
 
 class LocalLLMClient(BaseLLMClient):
@@ -27,7 +31,6 @@ class LocalLLMClient(BaseLLMClient):
         default_temperature: float = 0.7,
         default_max_tokens: int = 4096,
     ) -> None:
-        # Normalize base URL (ensure ends with /v1 for OpenAI compatibility)
         clean_url = base_url.rstrip("/")
         if not clean_url.endswith("/v1"):
             clean_url = f"{clean_url}/v1"
@@ -39,19 +42,30 @@ class LocalLLMClient(BaseLLMClient):
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
 
-        headers: dict[str, str] = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        headers: dict[str, str] = {"Accept": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        self._headers = headers
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
-            headers=self._headers,
+            headers=headers,
             timeout=httpx.Timeout(float(timeout_seconds), connect=3.0),
         )
+        from openai import AsyncOpenAI
+
+        self._openai_client = AsyncOpenAI(
+            base_url=self.base_url,
+            api_key=api_key or "local-key",
+            http_client=self._client,
+            max_retries=0,
+        )
+        self._provider = OpenAIProvider(
+            openai_client=self._openai_client,
+        )
+
+        self._model = OpenAIChatModel(model_name, provider=self._provider)
+
+
 
         logger.info(
             "local_llm_client_initialized",
@@ -60,167 +74,30 @@ class LocalLLMClient(BaseLLMClient):
             timeout_seconds=self.timeout_seconds,
         )
 
-    def _build_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
-        """Convert MCP JSON schemas to OpenAI-compatible Tool declarations."""
-        if not tools:
-            return None
-        formatted = []
-        for t in tools:
-            schema = t.get("input_schema") or t.get("parameters") or {}
-            formatted.append({
-                "type": "function",
-                "function": {
-                    "name": t["name"],
-                    "description": t.get("description", ""),
-                    "parameters": schema,
-                },
-            })
-        return formatted
-
-    def _build_messages(
-        self,
-        prompt: str | None = None,
-        system_prompt: str | None = None,
-        chat_history: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        if chat_history:
-            for m in chat_history:
-                # 1. Model turn with tool calls
-                if m.get("tool_calls"):
-                    tcs = [
-                        {
-                            "id": getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else None) or (tc.name if hasattr(tc, "name") else tc.get("name")),
-                            "type": "function",
-                            "function": {
-                                "name": tc.name if hasattr(tc, "name") else tc.get("name"),
-                                "arguments": json.dumps(tc.arguments if hasattr(tc, "arguments") else tc.get("arguments", {}))
-                                if isinstance(tc.arguments if hasattr(tc, "arguments") else tc.get("arguments"), dict)
-                                else str(tc.arguments if hasattr(tc, "arguments") else tc.get("arguments")),
-                            },
-                        }
-                        for tc in m["tool_calls"]
-                    ]
-                    messages.append({"role": "assistant", "content": m.get("content") or None, "tool_calls": tcs})
-
-                # 2. Tool response turn (supports single or parallel responses in m["responses"])
-                elif m.get("role") == "tool" or m.get("type") == "tool_response":
-                    if "responses" in m:
-                        for r in m["responses"]:
-                            call_id = r.get("tool_call_id") or r.get("name") or "tool"
-                            content_val = r.get("content") if isinstance(r.get("content"), str) else json.dumps(r.get("content", {}))
-                            messages.append({"role": "tool", "tool_call_id": call_id, "content": content_val})
-                    else:
-                        call_id = m.get("tool_call_id") or m.get("name") or "tool"
-                        content_val = m.get("content") if isinstance(m.get("content"), str) else json.dumps(m.get("content", {}))
-                        messages.append({"role": "tool", "tool_call_id": call_id, "content": content_val})
-
-                # 3. Standard text message
-                elif m.get("content"):
-                    role = m.get("role", "user")
-                    if role not in ("user", "assistant", "system"):
-                        role = "user"
-                    messages.append({"role": role, "content": m["content"]})
-
-        if prompt:
-            messages.append({"role": "user", "content": prompt})
-        return messages
+    def get_pydantic_model(self) -> OpenAIChatModel:
+        """Return the initialized Pydantic AI OpenAIChatModel."""
+        return self._model
 
     async def generate(
         self,
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, Any]] | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        """Generate full completion using local LLM instance via OpenAI-compatible endpoint."""
-        temp = temperature if temperature is not None else self.default_temperature
-        max_tok = max_tokens if max_tokens is not None else self.default_max_tokens
-
-        payload: dict[str, Any] = {
-            "model": self.model_name,
-            "messages": self._build_messages(prompt, system_prompt, chat_history),
-            "temperature": temp,
-            "max_tokens": max_tok,
-            "stream": False,
-        }
-        built_tools = self._build_tools(tools)
-        if built_tools:
-            payload["tools"] = built_tools
-
+        """Generate response using Pydantic AI OpenAIChatModel."""
+        agent = Agent(model=self._model, system_prompt=system_prompt or "")
         start = time.perf_counter()
-        try:
-            response = await self._client.post("/chat/completions", json=payload)
-            response.raise_for_status()
-            data = response.json()
-        except Exception as e:
-            latency_ms = (time.perf_counter() - start) * 1000
-            logger.error(
-                "local_llm_generate_failed",
-                base_url=self.base_url,
-                model=self.model_name,
-                error=str(e),
-                latency_ms=round(latency_ms, 1),
-            )
-            raise
-
+        result = await agent.run(prompt)
         latency_ms = (time.perf_counter() - start) * 1000
-        choices = data.get("choices", [])
-        message = choices[0].get("message", {}) if choices else {}
-        content = message.get("content") or ""
-
-        # Parse OpenAI tool_calls if emitted by local LLM
-        tool_calls: list[ToolCall] = []
-        for tc in message.get("tool_calls", []):
-            fn = tc.get("function", {})
-            name = fn.get("name", "")
-            raw_args = fn.get("arguments", "{}")
-            try:
-                args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
-            except Exception:
-                args = {}
-            tool_calls.append(
-                ToolCall(
-                    id=tc.get("id") or name,
-                    name=name,
-                    arguments=args,
-                )
-            )
-
-        raw_usage = data.get("usage", {})
-        p_tok = int(raw_usage.get("prompt_tokens", 0) or 0)
-        c_tok = int(raw_usage.get("completion_tokens", 0) or 0)
-        t_tok = int(raw_usage.get("total_tokens", 0) or (p_tok + c_tok))
-
-        usage = {
-            "prompt_tokens": p_tok,
-            "completion_tokens": c_tok,
-            "total_tokens": t_tok,
-        }
-
-        logger.info(
-            "local_llm_generate_completed",
-            model=self.model_name,
-            latency_ms=round(latency_ms, 1),
-            total_tokens=usage["total_tokens"],
-            tool_calls_count=len(tool_calls),
-        )
 
         return LLMResponse(
-            content=content,
+            content=result.output,
             model=self.model_name,
             provider=self.provider_name,
-            usage=usage,
+            usage=extract_usage_dict(result.usage),
             latency_ms=latency_ms,
             metadata={"base_url": self.base_url},
-            tool_calls=tool_calls,
         )
 
     async def stream(
@@ -228,62 +105,14 @@ class LocalLLMClient(BaseLLMClient):
         prompt: str,
         *,
         system_prompt: str | None = None,
-        chat_history: list[dict[str, Any]] | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
-        """Stream tokens asynchronously from local LLM instance and capture usage metadata."""
-        temp = temperature if temperature is not None else self.default_temperature
-        max_tok = max_tokens if max_tokens is not None else self.default_max_tokens
+        """Stream response tokens using Pydantic AI OpenAIChatModel."""
+        agent = Agent(model=self._model, system_prompt=system_prompt or "")
+        async with agent.run_stream(prompt) as stream_result:
+            async for token in stream_result.stream_text(delta=True):
+                yield token
 
-        payload: dict[str, Any] = {
-            "model": self.model_name,
-            "messages": self._build_messages(prompt, system_prompt, chat_history),
-            "temperature": temp,
-            "max_tokens": max_tok,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        built_tools = self._build_tools(tools)
-        if built_tools:
-            payload["tools"] = built_tools
-
-        try:
-            async with self._client.stream("POST", "/chat/completions", json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    clean_line = line.strip()
-                    if not clean_line or not clean_line.startswith("data:"):
-                        continue
-                    data_str = clean_line[len("data:"):].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                        if "usage" in chunk and chunk["usage"] and context is not None:
-                            raw_u = chunk["usage"]
-                            p_tok = int(raw_u.get("prompt_tokens", 0) or 0)
-                            c_tok = int(raw_u.get("completion_tokens", 0) or 0)
-                            t_tok = int(raw_u.get("total_tokens", 0) or (p_tok + c_tok))
-                            context["usage"] = {
-                                "prompt_tokens": p_tok,
-                                "completion_tokens": c_tok,
-                                "total_tokens": t_tok,
-                            }
-                        choices = chunk.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {})
-                            token = delta.get("content")
-                            if token:
-                                yield token
-                    except json.JSONDecodeError:
-                        continue
-        except Exception as e:
-            logger.error("local_llm_stream_failed", model=self.model_name, error=str(e))
-            raise
 
     def health(self) -> dict[str, Any]:
         """Return provider configuration info."""
@@ -318,7 +147,7 @@ class LocalLLMClient(BaseLLMClient):
                 "status": f"unhealthy_status_{response.status_code}",
                 "latency_ms": round(latency_ms, 1),
             }
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             latency_ms = (time.perf_counter() - start) * 1000
             return {
                 "provider": self.provider_name,
@@ -330,5 +159,5 @@ class LocalLLMClient(BaseLLMClient):
             }
 
     async def aclose(self) -> None:
-        """Close underlying httpx client."""
+        """Close underlying HTTP client."""
         await self._client.aclose()

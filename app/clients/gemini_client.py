@@ -1,51 +1,21 @@
 from __future__ import annotations
 
-import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import structlog
-from google import genai
-from google.genai import types
+from pydantic_ai import Agent
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google_cloud import GoogleCloudProvider
 
-from app.clients.base import BaseLLMClient, LLMResponse, ToolCall
+from app.agents.base import extract_usage_dict
+from app.clients.base import BaseLLMClient, LLMResponse
 
 logger = structlog.get_logger(__name__)
 
 
-def _extract_gemini_usage(um: Any) -> dict[str, int]:
-    if not um:
-        return {}
-    if isinstance(um, dict):
-        prompt = um.get("prompt_token_count") or um.get("prompt_tokens") or 0
-        completion = um.get("candidates_token_count") or um.get("completion_tokens") or 0
-        total = um.get("total_token_count") or um.get("total_tokens") or (prompt + completion)
-    else:
-        prompt = (
-            getattr(um, "prompt_token_count", None)
-            or getattr(um, "prompt_tokens", None)
-            or 0
-        )
-        completion = (
-            getattr(um, "candidates_token_count", None)
-            or getattr(um, "completion_tokens", None)
-            or getattr(um, "candidates_tokens", None)
-            or 0
-        )
-        total = (
-            getattr(um, "total_token_count", None)
-            or getattr(um, "total_tokens", None)
-            or (prompt + completion)
-        )
-    return {
-        "prompt_tokens": int(prompt),
-        "completion_tokens": int(completion),
-        "total_tokens": int(total),
-    }
-
-
 class GeminiClient(BaseLLMClient):
-    """Production LLM client for Google Gemini models via Vertex AI using the Google GenAI SDK."""
+    """Production LLM client for Google Gemini models on Vertex AI powered by Pydantic AI."""
 
     provider_name = "gemini"
 
@@ -63,11 +33,8 @@ class GeminiClient(BaseLLMClient):
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
 
-        self._client = genai.Client(
-            vertexai=True,
-            project=project_id,
-            location=location,
-        )
+        self._provider = GoogleCloudProvider(project=project_id, location=location)
+        self._model = GoogleModel(model_name, provider=self._provider)
 
         logger.info(
             "gemini_client_initialized",
@@ -76,183 +43,12 @@ class GeminiClient(BaseLLMClient):
             model_name=model_name,
         )
 
-    def _build_tools(self, tools: list[dict[str, Any]] | None) -> list[types.Tool] | None:
-        """Convert MCP JSON schemas to Gemini Tool declarations."""
-        if not tools:
-            return None
-        declarations = []
-        for t in tools:
-            schema = t.get("input_schema") or t.get("parameters") or {}
-            declarations.append(
-                types.FunctionDeclaration(
-                    name=t["name"],
-                    description=t.get("description", ""),
-                    parameters=schema if schema else None,
-                )
-            )
-        return [types.Tool(function_declarations=declarations)]
-
-    def _build_contents(
-        self,
-        prompt: str | None = None,
-        chat_history: list[dict[str, Any]] | None = None,
-    ) -> list[types.Content] | str:
-        if not chat_history:
-            return prompt or ""
-
-        contents: list[types.Content] = []
-        for m in chat_history:
-            # 1. Model turn with tool calls
-            if m.get("tool_calls"):
-                parts = [
-                    types.Part.from_function_call(
-                        name=tc.name if hasattr(tc, "name") else tc.get("name"),
-                        args=tc.arguments if hasattr(tc, "arguments") else tc.get("arguments", {}),
-                    )
-                    for tc in m["tool_calls"]
-                ]
-                contents.append(types.Content(role="model", parts=parts))
-
-            # 2. Tool response turn (supports single or parallel responses in m["responses"])
-            elif m.get("role") == "tool" or m.get("type") == "tool_response":
-                if "responses" in m:
-                    parts = []
-                    for r in m["responses"]:
-                        name = r.get("name") or "tool"
-                        res = r.get("content") or r.get("response") or {}
-                        if isinstance(res, str):
-                            res = {"output": res}
-                        parts.append(types.Part.from_function_response(name=name, response=res))
-                    contents.append(types.Content(role="user", parts=parts))
-                else:
-                    name = m.get("name") or "tool"
-                    res = m.get("content") or m.get("response") or {}
-                    if isinstance(res, str):
-                        res = {"output": res}
-                    contents.append(
-                        types.Content(
-                            role="user",
-                            parts=[types.Part.from_function_response(name=name, response=res)],
-                        )
-                    )
-
-            # 3. Standard text content
-            elif m.get("content"):
-                role = "user" if m.get("role") in ("user", "human") else "model"
-                contents.append(types.Content(role=role, parts=[types.Part.from_text(text=m["content"])]))
-
-        if prompt:
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=prompt)],
-                )
-            )
-        return contents
-
-    async def generate(
-        self,
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        chat_history: list[dict[str, Any]] | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        context: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> LLMResponse:
-        """Generate full completion or function calls using Gemini on Vertex AI."""
-        temp = temperature if temperature is not None else self.default_temperature
-        max_tok = max_tokens if max_tokens is not None else self.default_max_tokens
-
-        config = types.GenerateContentConfig(
-            temperature=temp,
-            max_output_tokens=max_tok,
-            system_instruction=system_prompt if system_prompt else None,
-            tools=self._build_tools(tools),
-        )
-
-        start = time.perf_counter()
-        response = await self._client.aio.models.generate_content(
-            model=self.model_name,
-            contents=self._build_contents(prompt, chat_history),
-            config=config,
-        )
-        latency_ms = (time.perf_counter() - start) * 1000
-
-        usage: dict[str, int] = {}
-        if hasattr(response, "usage_metadata") and response.usage_metadata:
-            usage = _extract_gemini_usage(response.usage_metadata)
-
-        content = response.text or ""
-
-        # Extract native function calls if emitted by Gemini
-        tool_calls: list[ToolCall] = []
-        if hasattr(response, "function_calls") and response.function_calls:
-            for fc in response.function_calls:
-                args = dict(fc.args) if hasattr(fc, "args") and fc.args else {}
-                tool_calls.append(
-                    ToolCall(
-                        id=getattr(fc, "id", fc.name) or fc.name,
-                        name=fc.name,
-                        arguments=args,
-                    )
-                )
-
-        logger.info(
-            "gemini_generate_completed",
-            model=self.model_name,
-            latency_ms=round(latency_ms, 1),
-            total_tokens=usage.get("total_tokens", 0),
-            tool_calls_count=len(tool_calls),
-        )
-
-        return LLMResponse(
-            content=content,
-            model=self.model_name,
-            provider=self.provider_name,
-            usage=usage,
-            latency_ms=latency_ms,
-            tool_calls=tool_calls,
-        )
-
-    async def stream(
-        self,
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        chat_history: list[dict[str, Any]] | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        context: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> AsyncGenerator[str, None]:
-        """Stream tokens asynchronously from Gemini on Vertex AI and capture exact model usage."""
-        temp = temperature if temperature is not None else self.default_temperature
-        max_tok = max_tokens if max_tokens is not None else self.default_max_tokens
-
-        config = types.GenerateContentConfig(
-            temperature=temp,
-            max_output_tokens=max_tok,
-            system_instruction=system_prompt if system_prompt else None,
-            tools=self._build_tools(tools),
-        )
-
-        stream_response = await self._client.aio.models.generate_content_stream(
-            model=self.model_name,
-            contents=self._build_contents(prompt, chat_history),
-            config=config,
-        )
-
-        async for chunk in stream_response:
-            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata and context is not None:
-                context["usage"] = _extract_gemini_usage(chunk.usage_metadata)
-            if chunk.text:
-                yield chunk.text
+    def get_pydantic_model(self) -> GoogleModel:
+        """Return the initialized Pydantic AI GoogleModel configured for Vertex AI."""
+        return self._model
 
     def health(self) -> dict[str, Any]:
+        """Return provider configuration and health status."""
         return {
             "provider": self.provider_name,
             "model": self.model_name,
@@ -260,3 +56,22 @@ class GeminiClient(BaseLLMClient):
             "location": self.location,
             "status": "healthy",
         }
+
+    async def generate(self, prompt: str, **kwargs: Any) -> LLMResponse:
+        """Compatibility fallback to execute a single prompt generation via Pydantic AI."""
+        agent = Agent(model=self._model)
+        result = await agent.run(prompt)
+        return LLMResponse(
+            content=result.output,
+            model=self.model_name,
+            provider=self.provider_name,
+            usage=extract_usage_dict(result.usage),
+        )
+
+    async def stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
+        """Compatibility fallback to stream tokens via Pydantic AI."""
+        agent = Agent(model=self._model)
+        async with agent.run_stream(prompt) as stream_result:
+            async for token in stream_result.stream_text(delta=True):
+                yield token
+

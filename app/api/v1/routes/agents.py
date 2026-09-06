@@ -40,8 +40,8 @@ async def sync_agents(request: Request, registry_url: str | None = None):
     """Dynamically re-sync tools from the MCP Registry Gateway without restarting."""
     registry = get_registry(request)
     mcp_client = getattr(request.app.state, "mcp_client", None)
-    gemini_client = getattr(request.app.state, "gemini_client", None)
-    if not mcp_client or not gemini_client or not registry:
+    llm_client = getattr(request.app.state, "router_client", None) or getattr(request.app.state, "gemini_client", None)
+    if not mcp_client or not llm_client or not registry:
         raise HTTPException(status_code=503, detail="Services not fully initialized")
 
     if registry_url:
@@ -49,7 +49,7 @@ async def sync_agents(request: Request, registry_url: str | None = None):
 
     from app.core.bootstrap import sync_mcp_tools
     try:
-        tools = await sync_mcp_tools(mcp_client, registry, gemini_client)
+        tools = await sync_mcp_tools(mcp_client, registry, llm_client)
         return {
             "status": "ok" if len(tools) > 0 else "warning",
             "registry_url": mcp_client.registry_url,
@@ -59,4 +59,5 @@ async def sync_agents(request: Request, registry_url: str | None = None):
             "last_error": getattr(mcp_client, "last_error", None),
         }
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"MCP sync failed: {e!s}")
+        raise HTTPException(status_code=502, detail=f"MCP sync failed: {e!s}") from e
+

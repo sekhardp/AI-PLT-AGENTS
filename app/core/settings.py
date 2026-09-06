@@ -108,6 +108,25 @@ class RouterSettings(BaseSettings):
     )
 
 
+class LogfireSettings(BaseSettings):
+    """Pydantic Logfire observability and tracing settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_ignore_empty=True,
+        env_prefix="LOGFIRE_",
+        extra="ignore",
+    )
+
+    TOKEN: str | None = Field(None, description="Logfire API Token (if empty, runs in local console mode)")
+    PROJECT_NAME: str = Field("ai-plt-agents", description="Logfire Project Name")
+    SERVICE_NAME: str = Field("ai-plt-agents", description="Service name reported in Logfire OpenTelemetry traces")
+    SERVICE_VERSION: str = Field(APP_VERSION, description="Service version reported to Logfire")
+    ENVIRONMENT: str | None = Field(None, description="Deployment environment (defaults to APP_ENV)")
+    SEND_TO_LOGFIRE: bool | None = Field(None, description="Whether to send spans to Logfire server (auto-detected if token present)")
+    CONSOLE: bool = Field(True, description="Whether to print logfire records to console")
+
+
 class AppSettings(BaseSettings):
     """Application settings for the AI Platform Agents Service."""
 
@@ -129,6 +148,7 @@ class AppSettings(BaseSettings):
     mcp_settings: MCPSettings = Field(default_factory=MCPSettings)
     local_llm_settings: LocalLLMSettings = Field(default_factory=LocalLLMSettings)
     router_settings: RouterSettings = Field(default_factory=RouterSettings)
+    logfire_settings: LogfireSettings = Field(default_factory=LogfireSettings)
 
     @property
     def is_production(self) -> bool:

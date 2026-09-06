@@ -1,11 +1,10 @@
-import logging
-
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def register_error_handlers(app: FastAPI) -> None:
@@ -27,7 +26,7 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("Unhandled server error: %s", exc)
+        logger.exception("unhandled_server_error", error=str(exc))
         return JSONResponse(
             status_code=500,
             content={"detail": f"Internal Server Error: {exc!s}", "status_code": 500},
