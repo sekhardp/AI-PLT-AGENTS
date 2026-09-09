@@ -38,9 +38,14 @@ class SkillRegistry:
                     skill_name = parsed["name"]
                     self._skills[skill_name] = parsed
                     for tool in parsed.get("tools", []):
-                        self._tool_to_skill[tool] = skill_name
+                        if tool not in self._tool_to_skill or skill_name.replace("-", "_") in tool:
+                            self._tool_to_skill[tool] = skill_name
             except Exception as e:
                 logger.warning("skill_load_failed", file=str(skill_file), error=str(e))
+
+    def get_skill(self, skill_name: str) -> dict[str, Any] | None:
+        """Retrieve a specific skill by its name."""
+        return self._skills.get(skill_name)
 
 
     def _parse_skill_file(self, content: str) -> dict[str, Any] | None:

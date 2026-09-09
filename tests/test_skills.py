@@ -15,4 +15,15 @@ def test_all_skills_instructions():
     """Verify aggregated skill instructions are formatted for system prompts."""
     instructions = skill_registry.get_all_skills_instructions()
     assert "rag-knowledge-base" in instructions
-    assert "Citations" in instructions or "Grounding" in instructions
+    assert "presentation-storytelling" in instructions
+    assert "SlideDeck" in instructions or "Data Storytelling" in instructions
+
+
+def test_presentation_skill_discovery():
+    """Verify presentation storytelling skill is discovered and contains required tool references."""
+    skill = skill_registry.get_skill("presentation-storytelling")
+    assert skill is not None
+    assert skill["name"] == "presentation-storytelling"
+    assert "sgs_bq_server__Gold_Executive_Dashboard" in skill["tools"]
+    assert "kpi_grid" in skill["body"]
+
