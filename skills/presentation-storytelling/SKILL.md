@@ -63,3 +63,24 @@ Ensure each slide has:
 - `title` & optional `subtitle`
 - `sources` list (e.g. `["BigQuery: Gold_Executive_Dashboard", "RAG: procurement_policy_2024.pdf"]`)
 - Complete content blocks matching the layout (`kpi_cards`, `chart`, `bullet_points`, `table`, etc.).
+
+---
+
+## 4. Mandatory Final Output Format
+
+> [!IMPORTANT]
+> **CRITICAL FOR UI RENDERING**: When answering any user request to create, generate, or summarize a presentation deck, you **MUST ALWAYS** output the complete, fully formed `SlideDeck` JSON object enclosed in a markdown ````json ... ```` code block in your final response.
+> 
+> The UI frontend will automatically detect this ````json ```` block and replace it with the live interactive `<SlideDeckViewer />` carousel widget and the **"Download .pptx"** export button. Do NOT output only plain text or a high-level summary; always include the full JSON payload!
+
+```json
+{
+  "deck_title": "Enterprise Procurement Spend Analysis",
+  "deck_subtitle": "Executive Briefing 2024",
+  "theme": "dark",
+  "author": "AI Platform Orchestrator",
+  "slides": [
+    ...
+  ]
+}
+```

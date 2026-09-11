@@ -43,8 +43,10 @@ class GeminiClient(BaseLLMClient):
             model_name=model_name,
         )
 
-    def get_pydantic_model(self) -> GoogleModel:
+    def get_pydantic_model(self, model_name: str | None = None) -> GoogleModel:
         """Return the initialized Pydantic AI GoogleModel configured for Vertex AI."""
+        if model_name and model_name != self.model_name:
+            return GoogleModel(model_name, provider=self._provider)
         return self._model
 
     def health(self) -> dict[str, Any]:
@@ -74,4 +76,3 @@ class GeminiClient(BaseLLMClient):
         async with agent.run_stream(prompt) as stream_result:
             async for token in stream_result.stream_text(delta=True):
                 yield token
-

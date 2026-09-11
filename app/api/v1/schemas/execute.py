@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 class ExecuteRequest(BaseModel):
     prompt: str = Field(..., description="User prompt to execute")
     agent_id: str | None = Field(None, description="Optional specific agent ID to invoke")
+    model: str | None = Field(None, description="Optional specific model requested by user (e.g. 'gemini-2.5-flash', 'gemini-2.5-pro', 'Qwen/Qwen2.5-7B-Instruct')")
+    session_id: str | None = Field(None, description="Optional conversation session ID for tracking and cancellation")
     routing_strategy: str | None = Field(
         None,
         description="Optional routing strategy override: AUTO, LOCAL_FIRST, FRONTIER_FIRST, LOCAL_ONLY, FRONTIER_ONLY",
@@ -16,6 +18,10 @@ class ExecuteRequest(BaseModel):
         None,
         description="Prior conversation turns formatted as [{'role': 'user'|'assistant', 'content': '...'}]",
     )
+
+
+class StopExecuteRequest(BaseModel):
+    session_id: str = Field(..., description="Session ID of the running agent execution to cancel")
 
 
 class ExecuteResponse(BaseModel):

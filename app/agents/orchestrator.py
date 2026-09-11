@@ -107,7 +107,8 @@ class OrchestratorAgent(BaseAgent):
             complexity_score = decision.complexity_score
             routing_strategy = getattr(decision.strategy, "value", str(decision.strategy))
 
-        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt)
+        selected_model = context.get("model") if context else None
+        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt, model_name=selected_model)
         deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context)
         tool_defs = self._get_available_mcp_tools()
         dynamic_tools = build_mcp_tools_from_definitions(tool_defs)
@@ -176,7 +177,8 @@ class OrchestratorAgent(BaseAgent):
                 context["routed_to"] = target
                 context["routing_reason"] = decision.reason
 
-        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt)
+        selected_model = context.get("model") if context else None
+        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt, model_name=selected_model)
         deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context)
         tool_defs = self._get_available_mcp_tools()
         dynamic_tools = build_mcp_tools_from_definitions(tool_defs)
@@ -197,4 +199,3 @@ class OrchestratorAgent(BaseAgent):
             logger.warning("pydantic_ai_stream_failed_falling_back", error=str(e))
             async for token in self.llm_client.stream(prompt=prompt, context=context):
                 yield token
-

@@ -7,7 +7,7 @@ from typing import Any
 import structlog
 
 from app.clients.base import BaseLLMClient, LLMResponse
-from app.router.smart_router import RoutingDecision, SmartAIRouter
+from app.router.smart_router import RoutingDecision, RoutingStrategy, SmartAIRouter
 
 logger = structlog.get_logger(__name__)
 
@@ -39,7 +39,7 @@ class SmartRouterClient(BaseLLMClient):
         """Classify a prompt using the underlying SmartAIRouter."""
         return self.router.classify(prompt, strategy_override=strategy_override, context=context)
 
-    def get_pydantic_model(self, target: str = "frontier") -> Any:
+    def get_pydantic_model(self, target: str = "frontier", model_name: str | None = None) -> Any:
         """Return the appropriate Pydantic AI Model instance for the given target with optional fallback."""
         if target == "local" and hasattr(self.local_client, "get_pydantic_model"):
             local_model = self.local_client.get_pydantic_model()
@@ -54,9 +54,13 @@ class SmartRouterClient(BaseLLMClient):
             return local_model
 
         if hasattr(self.frontier_client, "get_pydantic_model"):
+            if model_name:
+                try:
+                    return self.frontier_client.get_pydantic_model(model_name=model_name)
+                except TypeError:
+                    return self.frontier_client.get_pydantic_model()
             return self.frontier_client.get_pydantic_model()
         return None
-
 
     async def generate(
         self,
@@ -260,3 +264,6 @@ class SmartRouterClient(BaseLLMClient):
             "frontier": self.frontier_client.health(),
             "local": self.local_client.health(),
         }
+
+
+RouterClient = SmartRouterClient

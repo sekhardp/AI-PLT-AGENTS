@@ -19,18 +19,23 @@ def extract_usage_dict(usage: Any) -> dict[str, int]:
     }
 
 
-def resolve_pydantic_model(llm_client: Any, target: str | None = None, prompt: str = "") -> Any:
+def resolve_pydantic_model(llm_client: Any, target: str | None = None, prompt: str = "", model_name: str | None = None) -> Any:
     """Resolve the appropriate Pydantic AI Model instance from an LLM client or fallback bridge."""
     # 1. Check if LLM client provides get_pydantic_model
     if hasattr(llm_client, "get_pydantic_model"):
         try:
-            model = llm_client.get_pydantic_model(target or "frontier")
+            model = llm_client.get_pydantic_model(target or "frontier", model_name=model_name)
             if model is not None:
                 return model
         except TypeError:
-            model = llm_client.get_pydantic_model()
-            if model is not None:
-                return model
+            try:
+                model = llm_client.get_pydantic_model(target or "frontier")
+                if model is not None:
+                    return model
+            except TypeError:
+                model = llm_client.get_pydantic_model()
+                if model is not None:
+                    return model
 
     # 2. Check if client is already a Pydantic AI Model
     from pydantic_ai.models import Model
@@ -129,4 +134,3 @@ class BaseAgent(ABC):
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} id={self.agent_id!r} name={self.name!r}>"
-

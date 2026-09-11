@@ -106,3 +106,29 @@ async def test_router_endpoints(client: AsyncClient):
     assert data_strat["updated_strategy"] == "LOCAL_FIRST"
     assert data_strat["updated_threshold"] == 0.70
 
+
+
+@pytest.mark.asyncio
+async def test_execute_with_model_override(client: AsyncClient):
+    # Test specific model override
+    payload = {"prompt": "Hello Qwen", "model": "Qwen/Qwen2.5-7B-Instruct"}
+    res = await client.post("/api/v1/execute", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["routed_to"] == "local"
+
+    payload_gemini = {"prompt": "Hello Gemini", "model": "gemini-2.5-flash"}
+    res_gemini = await client.post("/api/v1/execute", json=payload_gemini)
+    assert res_gemini.status_code == 200
+    data_gemini = res_gemini.json()
+    assert data_gemini["routed_to"] == "frontier"
+
+
+@pytest.mark.asyncio
+async def test_execute_stop_endpoint(client: AsyncClient):
+    # Test stop endpoint when idle or non-existent session
+    res = await client.post("/api/v1/execute/stop", json={"session_id": "test_session_123"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] in ("idle", "stopped")
+    assert data["session_id"] == "test_session_123"

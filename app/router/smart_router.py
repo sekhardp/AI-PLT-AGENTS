@@ -34,7 +34,7 @@ class RoutingDecision:
 ROUTER_DECISION_PROMPT = (
     "You are an intelligent AI router. Your job is to classify incoming user questions into one of two execution tiers:\n"
     '- "local": If the question is simple, routine, a general greeting, everyday task, fact lookup, or just a single tool-call question (e.g. check weather, simple database query).\n'
-    '- "frontier": If the question is complex, requires deep reasoning, multi-step planning, mathematical proof, system architecture design, or detailed analysis.\n\n'
+    '- "frontier": If the question is complex, requires deep reasoning, multi-step planning, generating presentations/slide decks, analyzing procurement metrics, querying BigQuery/RAG, or detailed analysis.\n\n'
     'Respond ONLY with a valid JSON object in this format:\n'
     '{"target": "local", "reason": "simple query"} or {"target": "frontier", "reason": "complex reasoning"}\n'
     'Do NOT output markdown fences, code blocks, or any other text.'
@@ -211,8 +211,14 @@ class SmartAIRouter:
         if active_strategy == RoutingStrategy.FRONTIER_ONLY or (not self.is_local_available and self.fallback_enabled):
             return RoutingDecision(target="frontier", strategy=active_strategy, complexity_score=0.85, reason="circuit_breaker_or_frontier_only")
 
-        # Fast heuristic fallback: complex keywords go to frontier, simple go to local
-        is_complex = any(w in prompt.lower() for w in ("analyze", "architect", "distributed", "consensus", "paxos", "proof", "verification"))
+        # Fast heuristic fallback: complex keywords, presentations, and analytics go to frontier
+        complex_keywords = (
+            "analyze", "analysis", "architect", "distributed", "consensus", "paxos",
+            "proof", "verification", "slide", "presentation", "deck", "pptx", "powerpoint",
+            "bigquery", "spend", "procurement", "kpi", "dashboard", "trend",
+            "scorecard", "supplier", "savings", "rag", "synthesize", "executive", "briefing",
+        )
+        is_complex = any(w in prompt.lower() for w in complex_keywords)
         target = "frontier" if is_complex else "local"
         return RoutingDecision(
             target=target,
