@@ -1,5 +1,5 @@
 ---
-name: app-retire-server
+name: app-retire-dataset-analysis
 description: Retrieve app-retirement metadata from the BigQuery `app_retire_tables.app_retire_coda****` table when a request mentions Coda or asks about application-retirement table status, row counts, schemas, or hashes.
 ---
 
