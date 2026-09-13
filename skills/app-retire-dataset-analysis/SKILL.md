@@ -1,6 +1,6 @@
 ---
 name: app-retire-dataset-analysis
-description: Retrieve app-retirement metadata from the BigQuery `app_retire_tables.app_retire_coda****` table when a request mentions Coda or asks about application-retirement table status, row counts, schemas, or hashes.
+description: Retrieve app-retirement metadata from the BigQuery `app_retire_tables.app_retire_coda` table when a request mentions Coda or asks about application-retirement table status, row counts, schemas, or hashes.
 ---
 
 # Bigquery App Retirement
@@ -11,10 +11,8 @@ Use this skill for read-only requests about Coda application-retirement data. In
 
 - GCP project: `beam-suntory-gemini-llm-poc`
 - Dataset: `app_retire_tables`
-- Table pattern: `app_retire_coda****`
+- Table pattern: `app_retire_coda`
 - Available columns: `id`, `schema_name`, `table_name`, `md5_hash`, `row_count`, `status`
-
-The four asterisks are a placeholder. Resolve the actual Coda table name from the BigQuery catalog or the user's request before querying; do not place literal `****` in SQL. If multiple matching tables exist and the request does not identify one, list the candidates or ask the user which table to use.
 
 ## Querying rules
 
