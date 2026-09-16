@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,6 +17,7 @@ class AgentDeps:
     user_id: str | None = None
     document_ids: list[str] = field(default_factory=list)
     session_context: dict[str, Any] = field(default_factory=dict)
+    event_queue: asyncio.Queue[dict[str, Any]] | None = None
 
     @classmethod
     def from_context(
@@ -23,6 +25,7 @@ class AgentDeps:
         mcp_client: MCPRegistryClient | None = None,
         context: dict[str, Any] | None = None,
         registry: SkillRegistry | None = None,
+        event_queue: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> AgentDeps:
         """Construct AgentDeps from a runtime execution context dictionary."""
         ctx = context or {}
@@ -38,5 +41,5 @@ class AgentDeps:
             user_id=ctx.get("user_id"),
             document_ids=doc_ids,
             session_context=ctx,
+            event_queue=event_queue,
         )
-

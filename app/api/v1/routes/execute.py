@@ -118,11 +118,20 @@ async def execute_agent(req: ExecuteRequest, request: Request):
                 yield f"data: {init_eval_data}\n\n"
 
                 sent_decision_event = False
-                async for token in agent.stream(req.prompt, context=context):
+                async for item in agent.stream(req.prompt, context=context):
                     current_routed_to = context.get("routed_to", routed_to or "local")
                     current_model = context.get("model", model_name or "Qwen/Qwen2.5-7B-Instruct")
 
-                    # 2. As soon as routing decision is resolved and first token arrives, update tag
+                    if isinstance(item, dict):
+                        tool_event = dict(item)
+                        tool_event["agent_id"] = agent.agent_id
+                        tool_event["routed_to"] = current_routed_to
+                        tool_event["model"] = current_model
+                        yield f"data: {json.dumps(tool_event)}\n\n"
+                        await asyncio.sleep(0)
+                        continue
+
+                    token = str(item)
                     if not sent_decision_event:
                         sent_decision_event = True
                         decision_data = json.dumps({

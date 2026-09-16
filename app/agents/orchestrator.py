@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -166,8 +167,8 @@ class OrchestratorAgent(BaseAgent):
 
     async def stream(
         self, prompt: str, *, context: dict[str, Any] | None = None
-    ) -> AsyncGenerator[str, None]:
-        """Stream completion tokens dynamically using Pydantic AI run_stream."""
+    ) -> AsyncGenerator[Any, None]:
+        """Stream completion tokens and tool execution events dynamically using Pydantic AI run_stream."""
         target: str | None = None
         if hasattr(self.llm_client, "classify"):
             strategy_override = context.get("routing_strategy") if context else None
@@ -179,23 +180,47 @@ class OrchestratorAgent(BaseAgent):
 
         selected_model = context.get("model") if context else None
         model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt, model_name=selected_model)
-        deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context)
+        
+        event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context, event_queue=event_queue)
         tool_defs = self._get_available_mcp_tools()
         dynamic_tools = build_mcp_tools_from_definitions(tool_defs)
         agent = self._build_pydantic_agent(dynamic_tools)
 
-        try:
-            async with agent.run_stream(
-                prompt,
-                deps=deps,
-                model=model,
-            ) as stream_result:
-                async for token in stream_result.stream_text(delta=True):
-                    yield token
+        async def _run_stream_producer():
+            try:
+                async with agent.run_stream(
+                    prompt,
+                    deps=deps,
+                    model=model,
+                ) as stream_result:
+                    async for token in stream_result.stream_text(delta=True):
+                        await event_queue.put({"type": "token", "token": token})
 
-                if context is not None:
-                    context["usage"] = extract_usage_dict(stream_result.usage)
-        except Exception as e:
-            logger.warning("pydantic_ai_stream_failed_falling_back", error=str(e))
-            async for token in self.llm_client.stream(prompt=prompt, context=context):
-                yield token
+                    if context is not None:
+                        context["usage"] = extract_usage_dict(stream_result.usage)
+            except Exception as e:
+                logger.warning("pydantic_ai_stream_failed_falling_back", error=str(e))
+                try:
+                    async for token in self.llm_client.stream(prompt=prompt, context=context):
+                        await event_queue.put({"type": "token", "token": token})
+                except Exception as fb_err:
+                    await event_queue.put({"type": "error", "error": str(fb_err)})
+            finally:
+                await event_queue.put({"type": "end"})
+
+        producer_task = asyncio.create_task(_run_stream_producer())
+        try:
+            while True:
+                event = await event_queue.get()
+                if event.get("type") == "end":
+                    break
+                elif event.get("type") == "token":
+                    yield event["token"]
+                elif event.get("type") in ("tool_start", "tool_done", "step_update"):
+                    yield event
+                elif event.get("type") == "error":
+                    yield "\n[Error: " + str(event.get("error", "Unknown error")) + "]"
+        finally:
+            if not producer_task.done():
+                producer_task.cancel()
