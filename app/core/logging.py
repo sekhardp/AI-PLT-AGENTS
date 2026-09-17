@@ -8,7 +8,11 @@ from app.core.settings import app_settings
 
 
 def setup_logfire() -> None:
-    """Configures Pydantic Logfire observability and tracing."""
+    """Configures Pydantic Logfire observability and tracing.
+    
+    Suppresses noisy internal Pydantic validation micro-spans while retaining
+    high-level agent runs, LLM calls, tool execution responses, and error traces.
+    """
     lf_settings = app_settings.logfire_settings
     send_to_logfire = (
         lf_settings.SEND_TO_LOGFIRE
@@ -25,11 +29,11 @@ def setup_logfire() -> None:
         environment=lf_settings.ENVIRONMENT or app_settings.ENV,
         send_to_logfire=send_to_logfire,
         console=console_opt,
+        pydantic_plugin=None,  # Suppress noisy Pydantic schema validation micro-spans
     )
+    # Retain high-level agent runs, LLM calls, tool executions, and HTTP traces
     logfire.instrument_pydantic_ai()
-    logfire.instrument_pydantic()
     logfire.instrument_httpx()
-
 
 
 def setup_logging() -> None:
