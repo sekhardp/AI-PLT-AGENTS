@@ -56,14 +56,19 @@ class OrchestratorAgent(BaseAgent):
                 ctx_items.append(f"- User ID: {ctx.deps.user_id}")
             if ctx.deps.session_context:
                 for k, v in ctx.deps.session_context.items():
-                    if k not in ("chat_history", "routing_strategy", "document_id", "document_ids", "user_id"):
+                    if k not in ("chat_history", "routing_strategy", "document_id", "document_ids", "user_id", "prompt"):
                         ctx_items.append(f"- {k}: {v}")
             if ctx_items:
                 parts.append("### Current Session Context:\n" + "\n".join(ctx_items))
 
-            skills_summary = ctx.deps.skill_registry.get_all_skills_instructions()
-            if skills_summary:
-                parts.append(f"### Standard Operating Procedures & Skills:\n{skills_summary}")
+            # Available Skills Directory (Compact Overview + load_skill instruction)
+            skills_overview = ctx.deps.skill_registry.get_skills_overview()
+            if skills_overview:
+                parts.append(
+                    f"### Available Skills Directory:\n"
+                    f"{skills_overview}\n\n"
+                    f"To view the full standard operating procedure, formatting guidelines, or schemas for any specialized skill above, invoke the `load_skill` tool with the skill name (e.g. `load_skill(skill_name='presentation-storytelling')`)."
+                )
 
             return "\n\n".join(parts)
 
@@ -110,7 +115,7 @@ class OrchestratorAgent(BaseAgent):
 
         selected_model = context.get("model") if context else None
         model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt, model_name=selected_model)
-        deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context)
+        deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context, active_prompt=prompt)
         tool_defs = self._get_available_mcp_tools()
         dynamic_tools = build_mcp_tools_from_definitions(tool_defs)
         agent = self._build_pydantic_agent(dynamic_tools)
@@ -182,7 +187,7 @@ class OrchestratorAgent(BaseAgent):
         model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt, model_name=selected_model)
         
         event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context, event_queue=event_queue)
+        deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context, event_queue=event_queue, active_prompt=prompt)
         tool_defs = self._get_available_mcp_tools()
         dynamic_tools = build_mcp_tools_from_definitions(tool_defs)
         agent = self._build_pydantic_agent(dynamic_tools)

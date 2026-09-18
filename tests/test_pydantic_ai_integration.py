@@ -50,9 +50,14 @@ async def test_build_mcp_tools_from_definitions():
         {"name": "tool_b", "description": "Tool B description", "input_schema": {}},
     ]
     tools = build_mcp_tools_from_definitions(definitions)
-    assert len(tools) == 2
-    assert tools[0].name == "tool_a"
-    assert tools[1].name == "tool_b"
+    assert len(tools) == 3
+    assert tools[0].name == "load_skill"
+    assert tools[1].name == "tool_a"
+    assert tools[2].name == "tool_b"
+
+    tools_no_skills = build_mcp_tools_from_definitions(definitions, include_skill_loader=False)
+    assert len(tools_no_skills) == 2
+    assert tools_no_skills[0].name == "tool_a"
 
 
 @pytest.mark.asyncio

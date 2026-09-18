@@ -110,11 +110,47 @@ def create_mcp_tool(
     )
 
 
+def create_load_skill_tool() -> Tool[AgentDeps]:
+    """Create a Pydantic AI Tool allowing the LLM to dynamically inspect and load SKILL.md playbooks on-demand."""
+
+    async def load_skill(ctx: RunContext[AgentDeps], skill_name: str) -> str:
+        """Load the full standard operating procedure (SOP), guidelines, and schema rules for a specific skill from the Available Skills Directory."""
+        logger.info("llm_loading_skill_dynamically", skill_name=skill_name)
+        if not ctx.deps or not ctx.deps.skill_registry:
+            return f"Error: Skill registry is not available to load '{skill_name}'."
+
+        skill = ctx.deps.skill_registry.get_skill(skill_name)
+        if not skill:
+            # Fuzzy match by normalized name
+            clean_target = skill_name.lower().replace("_", "-")
+            for s_name, data in ctx.deps.skill_registry._skills.items():
+                if clean_target in s_name.lower() or s_name.lower() in clean_target:
+                    skill = data
+                    break
+
+        if not skill:
+            available = list(ctx.deps.skill_registry._skills.keys())
+            return f"Error: Skill '{skill_name}' not found. Available skills in directory: {available}"
+
+        return f"# Skill Playbook: {skill['name']}\n\nDescription: {skill.get('description', '')}\n\n{skill.get('body', '')}"
+
+    return Tool(
+        load_skill,
+        name="load_skill",
+        description="Load the full standard operating procedure (SOP), workflow guidelines, and formatting schemas for a specific skill from the Available Skills Directory by its name (e.g. 'presentation-storytelling', 'sales-products-analytics', 'rag-knowledge-base').",
+        takes_ctx=True,
+    )
+
+
 def build_mcp_tools_from_definitions(
     tool_definitions: list[dict[str, Any]],
+    include_skill_loader: bool = True,
 ) -> list[Tool[AgentDeps]]:
     """Convert a list of MCP tool definition dictionaries into Pydantic AI Tool instances."""
     tools: list[Tool[AgentDeps]] = []
+    if include_skill_loader:
+        tools.append(create_load_skill_tool())
+
     for tool_def in tool_definitions:
         name = tool_def.get("name")
         if not name:

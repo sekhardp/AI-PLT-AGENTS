@@ -47,6 +47,16 @@ class SkillRegistry:
         """Retrieve a specific skill by its name."""
         return self._skills.get(skill_name)
 
+    def list_skills(self) -> list[dict[str, Any]]:
+        """List metadata for all registered skills without their full markdown bodies."""
+        return [
+            {
+                "name": data["name"],
+                "description": data.get("description", ""),
+                "tools": data.get("tools", []),
+            }
+            for data in self._skills.values()
+        ]
 
     def _parse_skill_file(self, content: str) -> dict[str, Any] | None:
         """Parse frontmatter and markdown body of a SKILL.md file."""
@@ -100,8 +110,94 @@ class SkillRegistry:
             return self._skills.get(skill_name)
         return None
 
+    def get_skills_overview(self) -> str:
+        """Return a lightweight progressive summary (names + descriptions) of available skills for the base system prompt."""
+        if not self._skills:
+            return ""
+        lines = []
+        for name, data in self._skills.items():
+            desc = data.get("description", "No description available.")
+            lines.append(f"- **`{name}`**: {desc}")
+        return "\n".join(lines)
+
+    def get_relevant_skills_instructions(
+        self,
+        prompt: str = "",
+        document_ids: list[str] | None = None,
+        tool_names: list[str] | None = None,
+    ) -> str:
+        """Progressively load and format full SKILL.md bodies ONLY for skills relevant to the active prompt/context."""
+        if not self._skills:
+            return ""
+
+        prompt_lower = prompt.lower()
+        matched_skills: dict[str, dict[str, Any]] = {}
+
+        # 1. Match based on document_ids (triggers RAG knowledge base skill)
+        if document_ids:
+            for name, data in self._skills.items():
+                if "rag" in name.lower() or "document" in name.lower() or "knowledge" in name.lower():
+                    matched_skills[name] = data
+
+        # 2. Match based on explicit tool names if provided
+        if tool_names:
+            for t in tool_names:
+                skill_name = self._tool_to_skill.get(t)
+                if skill_name and skill_name in self._skills:
+                    matched_skills[skill_name] = self._skills[skill_name]
+
+        # 3. Match based on prompt domain triggers
+        for name, data in self._skills.items():
+            if name in matched_skills:
+                continue
+
+            name_lower = name.lower()
+            desc_lower = data.get("description", "").lower()
+            tools = data.get("tools", [])
+
+            is_relevant = False
+
+            # Check presentation / storytelling triggers
+            if "presentation" in name_lower or "storytelling" in name_lower:
+                if any(w in prompt_lower for w in ("presentation", "slide", "deck", "pitch", "powerpoint", "pptx", "briefing", "qbr")):
+                    is_relevant = True
+
+            # Check RAG / document search triggers
+            elif "rag" in name_lower or "knowledge" in name_lower:
+                if any(w in prompt_lower for w in ("document", "docs", "rag", "pdf", "file", "knowledge base", "uploaded", "chunk", "attachment")):
+                    is_relevant = True
+
+            # Check procurement / spend analytics triggers
+            elif "sgs" in name_lower or "spend" in name_lower or "procurement" in name_lower:
+                if any(w in prompt_lower for w in ("procurement", "spend", "vendor", "supplier", "po", "purchase order", "invoice", "cost center", "gl account", "savings", "shadow it", "attribution")):
+                    is_relevant = True
+
+            # Check sales / product analytics triggers
+            elif "sales" in name_lower or "product" in name_lower:
+                if any(w in prompt_lower for w in ("sales", "product", "customer", "inventory", "retail", "store", "order", "omnichannel", "regional", "restock")):
+                    is_relevant = True
+
+            # Check tool triggers
+            if not is_relevant:
+                for t in tools:
+                    bare = t.split("__")[-1].lower()
+                    if bare in prompt_lower or t.lower() in prompt_lower:
+                        is_relevant = True
+                        break
+
+            if is_relevant:
+                matched_skills[name] = data
+
+        if not matched_skills:
+            return ""
+
+        blocks = []
+        for name, data in matched_skills.items():
+            blocks.append(f"#### Active Skill Playbook: `{name}`\n{data['body']}")
+        return "\n\n".join(blocks)
+
     def get_all_skills_instructions(self) -> str:
-        """Combine all loaded skill bodies for high-level orchestrator system prompts."""
+        """Combine all loaded skill bodies. Used for tests and full-compilation scenarios."""
         if not self._skills:
             return ""
         blocks = []

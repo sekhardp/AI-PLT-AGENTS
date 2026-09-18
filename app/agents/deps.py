@@ -18,6 +18,7 @@ class AgentDeps:
     document_ids: list[str] = field(default_factory=list)
     session_context: dict[str, Any] = field(default_factory=dict)
     event_queue: asyncio.Queue[dict[str, Any]] | None = None
+    active_prompt: str = ""
 
     @classmethod
     def from_context(
@@ -26,6 +27,7 @@ class AgentDeps:
         context: dict[str, Any] | None = None,
         registry: SkillRegistry | None = None,
         event_queue: asyncio.Queue[dict[str, Any]] | None = None,
+        active_prompt: str = "",
     ) -> AgentDeps:
         """Construct AgentDeps from a runtime execution context dictionary."""
         ctx = context or {}
@@ -42,4 +44,5 @@ class AgentDeps:
             document_ids=doc_ids,
             session_context=ctx,
             event_queue=event_queue,
+            active_prompt=active_prompt or ctx.get("prompt", ""),
         )
