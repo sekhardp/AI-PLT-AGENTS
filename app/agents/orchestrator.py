@@ -194,16 +194,24 @@ class OrchestratorAgent(BaseAgent):
 
         async def _run_stream_producer():
             try:
-                async with agent.run_stream(
+                from pydantic_ai import PartDeltaEvent, PartStartEvent
+                from pydantic_ai.messages import TextPart, TextPartDelta
+
+                async with agent.run_stream_events(
                     prompt,
                     deps=deps,
                     model=model,
-                ) as stream_result:
-                    async for token in stream_result.stream_text(delta=True):
-                        await event_queue.put({"type": "token", "token": token})
-
-                    if context is not None:
-                        context["usage"] = extract_usage_dict(stream_result.usage)
+                ) as events:
+                    async for event in events:
+                        if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+                            if event.part.content:
+                                await event_queue.put({"type": "token", "token": event.part.content})
+                        elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                            if event.delta.content_delta:
+                                await event_queue.put({"type": "token", "token": event.delta.content_delta})
+                        elif hasattr(event, "result") and hasattr(event.result, "usage"):
+                            if context is not None:
+                                context["usage"] = extract_usage_dict(event.result.usage)
             except Exception as e:
                 logger.warning("pydantic_ai_stream_failed_falling_back", error=str(e))
                 try:

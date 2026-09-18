@@ -24,18 +24,22 @@ def resolve_pydantic_model(llm_client: Any, target: str | None = None, prompt: s
     # 1. Check if LLM client provides get_pydantic_model
     if hasattr(llm_client, "get_pydantic_model"):
         try:
-            model = llm_client.get_pydantic_model(target or "frontier", model_name=model_name)
-            if model is not None:
-                return model
-        except TypeError:
-            try:
-                model = llm_client.get_pydantic_model(target or "frontier")
+            if hasattr(llm_client, "router"):
+                model = llm_client.get_pydantic_model(target or "frontier", model_name=model_name)
                 if model is not None:
                     return model
-            except TypeError:
+            else:
+                clean_model_name = model_name if model_name not in ("frontier", "local") else None
+                model = llm_client.get_pydantic_model(model_name=clean_model_name)
+                if model is not None:
+                    return model
+        except TypeError:
+            try:
                 model = llm_client.get_pydantic_model()
                 if model is not None:
                     return model
+            except Exception:
+                pass
 
     # 2. Check if client is already a Pydantic AI Model
     from pydantic_ai.models import Model

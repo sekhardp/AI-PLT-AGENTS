@@ -45,7 +45,7 @@ class GeminiClient(BaseLLMClient):
 
     def get_pydantic_model(self, model_name: str | None = None) -> GoogleModel:
         """Return the initialized Pydantic AI GoogleModel configured for Vertex AI."""
-        if model_name and model_name != self.model_name:
+        if model_name and model_name not in ("frontier", "local") and model_name != self.model_name:
             return GoogleModel(model_name, provider=self._provider)
         return self._model
 
