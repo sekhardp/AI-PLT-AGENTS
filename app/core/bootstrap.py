@@ -30,6 +30,12 @@ async def sync_mcp_tools(
 ) -> list[dict[str, Any]]:
     """Discover tools from MCP Registry Gateway and dynamically register MCPAgents."""
     tools = await mcp_client.list_tools()
+    if tools:
+        active_tool_agent_ids = {f"mcp-{tool['name']}" for tool in tools}
+        for existing in registry.list_agents():
+            if existing.agent_id.startswith("mcp-") and existing.agent_id not in active_tool_agent_ids:
+                registry.unregister(existing.agent_id)
+
     for tool in tools:
         tool_name = tool["name"]
         agent_id = f"mcp-{tool_name}"

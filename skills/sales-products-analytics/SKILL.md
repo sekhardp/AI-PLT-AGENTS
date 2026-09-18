@@ -2,6 +2,8 @@
 name: sales-products-analytics
 description: Authoritative analytics, KPI reporting, and omnichannel synthesis guide for the BigQuery sales_products dataset in beam-suntory-gemini-llm-poc.
 tools:
+  - sales_products_server__get_dataset_metadata
+  - sales_products_server__get_dimension_catalog
   - sales_products_server__get_customer_purchases
   - sales_products_server__get_inventory_status
   - sales_products_server__get_online_orders
