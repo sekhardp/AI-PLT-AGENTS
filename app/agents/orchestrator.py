@@ -18,9 +18,11 @@ from app.clients.base import BaseLLMClient
 logger = structlog.get_logger(__name__)
 
 ORCHESTRATOR_SYSTEM_PROMPT = """You are the master AI Platform Orchestrator.
-Your job is to assist the user by coordinating specialized tools and agents, or answering their queries directly with depth, clarity, and precision.
+Your job is to assist the user by coordinating specialized skills and tools.
 
-When specialized tools or domain agents are registered, evaluate whether the user prompt requires a tool/agent. If not, provide a comprehensive, accurate response directly.
+CRITICAL PROTOCOL (PROGRESSIVE CONTEXT DISCLOSURE):
+You have ZERO initial knowledge of internal database schemas, column names, or table definitions.
+To handle ANY analytical, database, or domain request, you MUST FIRST call `load_skill(skill_name='...')` in your first turn to load the specific domain skill and ground truth schemas before executing domain queries.
 """
 
 
@@ -61,13 +63,13 @@ class OrchestratorAgent(BaseAgent):
             if ctx_items:
                 parts.append("### Current Session Context:\n" + "\n".join(ctx_items))
 
-            # Available Skills Directory (Compact Overview + load_skill instruction)
+            # Available Skills Directory (Mandatory Progressive Skill Loading)
             skills_overview = ctx.deps.skill_registry.get_skills_overview()
             if skills_overview:
                 parts.append(
                     f"### Available Skills Directory:\n"
                     f"{skills_overview}\n\n"
-                    f"To view the full standard operating procedure, formatting guidelines, or schemas for any specialized skill above, invoke the `load_skill` tool with the skill name (e.g. `load_skill(skill_name='presentation-storytelling')`)."
+                    f"MANDATORY REQUIREMENT: Before executing domain actions or writing queries, invoke `load_skill(skill_name='...')` with the relevant skill name above to load its playbook and ground truth schemas."
                 )
 
             return "\n\n".join(parts)

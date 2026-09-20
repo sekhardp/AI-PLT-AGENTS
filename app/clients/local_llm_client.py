@@ -49,7 +49,7 @@ class LocalLLMClient(BaseLLMClient):
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             headers=headers,
-            timeout=httpx.Timeout(float(timeout_seconds), connect=3.0),
+            timeout=httpx.Timeout(float(timeout_seconds), connect=15.0),
         )
         from openai import AsyncOpenAI
 
