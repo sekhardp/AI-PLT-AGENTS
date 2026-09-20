@@ -40,18 +40,9 @@ class SmartRouterClient(BaseLLMClient):
         return self.router.classify(prompt, strategy_override=strategy_override, context=context)
 
     def get_pydantic_model(self, target: str = "frontier", model_name: str | None = None) -> Any:
-        """Return the appropriate Pydantic AI Model instance for the given target with optional fallback."""
+        """Return the appropriate Pydantic AI Model instance for the given target."""
         if target == "local" and hasattr(self.local_client, "get_pydantic_model"):
-            local_model = self.local_client.get_pydantic_model()
-            if self.router.fallback_enabled and hasattr(self.frontier_client, "get_pydantic_model"):
-                try:
-                    from pydantic_ai.models.fallback import FallbackModel
-
-                    frontier_model = self.frontier_client.get_pydantic_model()
-                    return FallbackModel(local_model, frontier_model)
-                except Exception:
-                    return local_model
-            return local_model
+            return self.local_client.get_pydantic_model()
 
         if hasattr(self.frontier_client, "get_pydantic_model"):
             if model_name:
@@ -89,6 +80,12 @@ class SmartRouterClient(BaseLLMClient):
             reason=decision.reason,
         )
 
+        is_local_only = (
+            decision.strategy == RoutingStrategy.LOCAL_ONLY
+            or (context and context.get("routing_strategy") == "LOCAL_ONLY")
+            or (strategy_override and strategy_override.upper() == "LOCAL_ONLY")
+        )
+
         start = time.perf_counter()
         if decision.target == "local":
             try:
@@ -105,6 +102,7 @@ class SmartRouterClient(BaseLLMClient):
                 response.metadata.update(
                     {
                         "routed_to": "local",
+                        "model": getattr(self.local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct"),
                         "routing_strategy": decision.strategy.value,
                         "complexity_score": decision.complexity_score,
                         "routing_reason": decision.reason,
@@ -114,8 +112,11 @@ class SmartRouterClient(BaseLLMClient):
                 return response
             except Exception as e:
                 self.router.record_local_failure(e)
-                if not self.router.fallback_enabled:
-                    raise
+                if not self.router.fallback_enabled or is_local_only:
+                    raise ConnectionError(
+                        f"Local LLM instance is offline or unreachable ({e!s}). "
+                        f"Please check if your Local LLM VM instance is running."
+                    ) from e
 
                 logger.warning(
                     "smart_router_fallback_to_frontier",
@@ -131,9 +132,11 @@ class SmartRouterClient(BaseLLMClient):
                     tools=tools,
                     context=context,
                 )
+                frontier_model_name = getattr(self.frontier_client, "model_name", "gemini-2.5-flash")
                 fallback_resp.metadata.update(
                     {
                         "routed_to": "frontier",
+                        "model": frontier_model_name,
                         "routing_strategy": decision.strategy.value,
                         "complexity_score": decision.complexity_score,
                         "routing_reason": f"fallback_local_error: {e!s}",
@@ -141,6 +144,10 @@ class SmartRouterClient(BaseLLMClient):
                         "total_latency_ms": (time.perf_counter() - start) * 1000,
                     }
                 )
+                if context is not None:
+                    context["fallback_triggered"] = True
+                    context["routed_to"] = "frontier"
+                    context["model"] = frontier_model_name
                 return fallback_resp
 
         # Target: Frontier (Gemini)
@@ -156,6 +163,7 @@ class SmartRouterClient(BaseLLMClient):
         response.metadata.update(
             {
                 "routed_to": "frontier",
+                "model": getattr(self.frontier_client, "model_name", "gemini-2.5-flash"),
                 "routing_strategy": decision.strategy.value,
                 "complexity_score": decision.complexity_score,
                 "routing_reason": decision.reason,
@@ -183,6 +191,12 @@ class SmartRouterClient(BaseLLMClient):
             decision = await self.router.decide(prompt, strategy_override=strategy_override, context=context)
         else:
             decision = self.router.classify(prompt, strategy_override=strategy_override, context=context)
+
+        is_local_only = (
+            decision.strategy == RoutingStrategy.LOCAL_ONLY
+            or (context and context.get("routing_strategy") == "LOCAL_ONLY")
+            or (strategy_override and strategy_override.upper() == "LOCAL_ONLY")
+        )
 
         chosen_model = (
             getattr(self.local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct")
@@ -218,18 +232,22 @@ class SmartRouterClient(BaseLLMClient):
                 return
             except Exception as e:
                 self.router.record_local_failure(e)
-                if not self.router.fallback_enabled:
-                    raise
+                if not self.router.fallback_enabled or is_local_only:
+                    raise ConnectionError(
+                        f"Local LLM instance is offline or unreachable ({e!s}). "
+                        f"Please check if your Local LLM VM instance is running."
+                    ) from e
 
                 logger.warning(
                     "smart_router_stream_fallback_to_frontier",
                     local_error=str(e),
                     prompt_preview=prompt[:60],
                 )
+                frontier_model_name = getattr(self.frontier_client, "model_name", "gemini-2.5-flash")
                 if context is not None:
                     context["fallback_triggered"] = True
                     context["routed_to"] = "frontier"
-                    context["model"] = getattr(self.frontier_client, "model_name", "gemini-2.5-flash")
+                    context["model"] = frontier_model_name
 
                 async for token in self.frontier_client.stream(
                     prompt,

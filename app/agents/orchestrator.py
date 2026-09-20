@@ -113,8 +113,14 @@ class OrchestratorAgent(BaseAgent):
             complexity_score = decision.complexity_score
             routing_strategy = getattr(decision.strategy, "value", str(decision.strategy))
 
+        is_local_only = (
+            routing_strategy == "LOCAL_ONLY"
+            or (context and context.get("routing_strategy") == "LOCAL_ONLY")
+        )
+        fallback_enabled = getattr(getattr(self.llm_client, "router", None), "fallback_enabled", True)
+
         selected_model = context.get("model") if context else None
-        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt, model_name=selected_model)
+        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt, model_name=selected_model, context=context)
         deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context, active_prompt=prompt)
         tool_defs = self._get_available_mcp_tools()
         dynamic_tools = build_mcp_tools_from_definitions(tool_defs)
@@ -152,6 +158,7 @@ class OrchestratorAgent(BaseAgent):
                 "routing_reason": routing_reason,
                 "complexity_score": complexity_score,
                 "executed_tools": executed_tools,
+                "fallback_triggered": False,
             }
             if routing_strategy:
                 metadata["routing_strategy"] = routing_strategy
@@ -167,6 +174,74 @@ class OrchestratorAgent(BaseAgent):
                 metadata=metadata,
             )
         except Exception as e:
+            if target == "local":
+                if hasattr(self.llm_client, "router") and hasattr(self.llm_client.router, "record_local_failure"):
+                    self.llm_client.router.record_local_failure(e)
+
+                if fallback_enabled and not is_local_only:
+                    logger.warning(
+                        "orchestrator_local_execution_failed_falling_back_to_frontier",
+                        error=str(e),
+                    )
+                    frontier_model = resolve_pydantic_model(self.llm_client, target="frontier", prompt=prompt, context=context)
+                    frontier_model_name = getattr(getattr(self.llm_client, "frontier_client", None), "model_name", "gemini-2.5-flash")
+
+                    if context is not None:
+                        context["fallback_triggered"] = True
+                        context["routed_to"] = "frontier"
+                        context["model"] = frontier_model_name
+                        context["routing_reason"] = f"fallback_local_error: {e!s}"
+
+                    fb_result = await agent.run(
+                        prompt,
+                        deps=deps,
+                        model=frontier_model,
+                    )
+                    latency_ms = (time.perf_counter() - start_time) * 1000
+                    usage_dict = extract_usage_dict(fb_result.usage)
+
+                    executed_tools = []
+                    for m in fb_result.all_messages():
+                        for p in getattr(m, "parts", []):
+                            if isinstance(p, ToolCallPart):
+                                executed_tools.append({
+                                    "tool_name": p.tool_name,
+                                    "arguments": p.args if isinstance(p.args, dict) else {},
+                                })
+                            elif isinstance(p, ToolReturnPart):
+                                if executed_tools and executed_tools[-1].get("tool_name") == p.tool_name:
+                                    executed_tools[-1]["result"] = str(p.content)
+
+                    fb_metadata: dict[str, Any] = {
+                        "provider": getattr(self.llm_client, "provider_name", "pydantic_ai"),
+                        "model": frontier_model_name,
+                        "usage": usage_dict,
+                        "latency_ms": round(latency_ms, 1),
+                        "routed_to": "frontier",
+                        "routing_reason": f"fallback_local_error: {e!s}",
+                        "complexity_score": complexity_score,
+                        "executed_tools": executed_tools,
+                        "fallback_triggered": True,
+                    }
+                    if routing_strategy:
+                        fb_metadata["routing_strategy"] = routing_strategy
+                    if context:
+                        for k, v in context.items():
+                            if k not in fb_metadata:
+                                fb_metadata[k] = v
+
+                    return AgentResult(
+                        content=fb_result.output,
+                        agent_id=self.agent_id,
+                        agent_name=self.name,
+                        metadata=fb_metadata,
+                    )
+                else:
+                    raise ConnectionError(
+                        f"Local LLM instance is offline or unreachable ({e!s}). "
+                        f"Please check if your Local LLM VM instance is running."
+                    ) from e
+
             logger.error("pydantic_ai_orchestrator_run_failed", error=str(e))
             raise
 
@@ -175,18 +250,38 @@ class OrchestratorAgent(BaseAgent):
     ) -> AsyncGenerator[Any, None]:
         """Stream completion tokens and tool execution events dynamically using Pydantic AI run_stream."""
         target: str | None = None
+        routing_strategy: str | None = context.get("routing_strategy") if context else None
+        decision = None
         if hasattr(self.llm_client, "classify"):
             strategy_override = context.get("routing_strategy") if context else None
             decision = self.llm_client.classify(prompt, strategy_override=strategy_override, context=context)
             target = decision.target
+            routing_strategy = getattr(decision.strategy, "value", str(decision.strategy))
             if context is not None:
                 context["routed_to"] = target
                 context["routing_reason"] = decision.reason
+                context["routing_strategy"] = routing_strategy
+                if decision.metadata.get("fallback_triggered"):
+                    context["fallback_triggered"] = True
+
+        is_local_only = (
+            routing_strategy == "LOCAL_ONLY"
+            or (context and context.get("routing_strategy") == "LOCAL_ONLY")
+        )
+        fallback_enabled = getattr(getattr(self.llm_client, "router", None), "fallback_enabled", True)
 
         selected_model = context.get("model") if context else None
-        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt, model_name=selected_model)
-        
+        model = resolve_pydantic_model(self.llm_client, target=target, prompt=prompt, model_name=selected_model, context=context)
+
         event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        if decision and decision.metadata.get("fallback_triggered"):
+            frontier_name = getattr(getattr(self.llm_client, "frontier_client", None), "model_name", "gemini-2.5-flash")
+            event_queue.put_nowait({
+                "type": "routing_fallback",
+                "routed_to": target,
+                "model": frontier_name,
+                "reason": decision.reason,
+            })
         deps = AgentDeps.from_context(mcp_client=self._get_mcp_client(), context=context, event_queue=event_queue, active_prompt=prompt)
         tool_defs = self._get_available_mcp_tools()
         dynamic_tools = build_mcp_tools_from_definitions(tool_defs)
@@ -213,12 +308,61 @@ class OrchestratorAgent(BaseAgent):
                             if context is not None:
                                 context["usage"] = extract_usage_dict(event.result.usage)
             except Exception as e:
-                logger.warning("pydantic_ai_stream_failed_falling_back", error=str(e))
-                try:
-                    async for token in self.llm_client.stream(prompt=prompt, context=context):
-                        await event_queue.put({"type": "token", "token": token})
-                except Exception as fb_err:
-                    await event_queue.put({"type": "error", "error": str(fb_err)})
+                logger.warning("pydantic_ai_stream_execution_exception", error=str(e))
+                if target == "local":
+                    if hasattr(self.llm_client, "router") and hasattr(self.llm_client.router, "record_local_failure"):
+                        self.llm_client.router.record_local_failure(e)
+
+                    if fallback_enabled and not is_local_only:
+                        logger.warning(
+                            "orchestrator_stream_fallback_to_frontier",
+                            local_error=str(e),
+                        )
+                        frontier_model_name = getattr(getattr(self.llm_client, "frontier_client", None), "model_name", "gemini-2.5-flash")
+                        if context is not None:
+                            context["fallback_triggered"] = True
+                            context["routed_to"] = "frontier"
+                            context["model"] = frontier_model_name
+                            context["routing_reason"] = f"fallback_local_error: {e!s}"
+
+                        await event_queue.put({
+                            "type": "routing_fallback",
+                            "routed_to": "frontier",
+                            "model": frontier_model_name,
+                            "reason": f"Local LLM unreachable ({e!s}). Falling back to Frontier Gemini.",
+                        })
+
+                        frontier_model = resolve_pydantic_model(self.llm_client, target="frontier", prompt=prompt, context=context)
+                        try:
+                            from pydantic_ai import PartDeltaEvent, PartStartEvent
+                            from pydantic_ai.messages import TextPart, TextPartDelta
+
+                            async with agent.run_stream_events(
+                                prompt,
+                                deps=deps,
+                                model=frontier_model,
+                            ) as fb_events:
+                                async for fb_event in fb_events:
+                                    if isinstance(fb_event, PartStartEvent) and isinstance(fb_event.part, TextPart):
+                                        if fb_event.part.content:
+                                            await event_queue.put({"type": "token", "token": fb_event.part.content})
+                                    elif isinstance(fb_event, PartDeltaEvent) and isinstance(fb_event.delta, TextPartDelta):
+                                        if fb_event.delta.content_delta:
+                                            await event_queue.put({"type": "token", "token": fb_event.delta.content_delta})
+                                    elif hasattr(fb_event, "result") and hasattr(fb_event.result, "usage"):
+                                        if context is not None:
+                                            context["usage"] = extract_usage_dict(fb_event.result.usage)
+                        except Exception as fb_err:
+                            logger.error("orchestrator_frontier_stream_fallback_failed", error=str(fb_err))
+                            await event_queue.put({"type": "error", "error": str(fb_err)})
+                    else:
+                        err_msg = (
+                            f"Local LLM instance is offline or unreachable ({e!s}). "
+                            f"Please check if your Local LLM VM instance is running."
+                        )
+                        await event_queue.put({"type": "error", "error": err_msg})
+                else:
+                    await event_queue.put({"type": "error", "error": str(e)})
             finally:
                 await event_queue.put({"type": "end"})
 
@@ -230,7 +374,7 @@ class OrchestratorAgent(BaseAgent):
                     break
                 elif event.get("type") == "token":
                     yield event["token"]
-                elif event.get("type") in ("tool_start", "tool_done", "step_update"):
+                elif event.get("type") in ("tool_start", "tool_done", "step_update", "routing_fallback"):
                     yield event
                 elif event.get("type") == "error":
                     yield "\n[Error: " + str(event.get("error", "Unknown error")) + "]"

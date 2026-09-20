@@ -110,18 +110,38 @@ async def test_router_endpoints(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_execute_with_model_override(client: AsyncClient):
-    # Test specific model override
+    # Test exact full model ID
     payload = {"prompt": "Hello Qwen", "model": "Qwen/Qwen2.5-7B-Instruct"}
     res = await client.post("/api/v1/execute", json=payload)
     assert res.status_code == 200
     data = res.json()
     assert data["routed_to"] == "local"
 
+    # Test UI dropdown format: "Qwen 2.5 7B"
+    payload_ui_qwen = {"prompt": "Hello Qwen", "model": "Qwen 2.5 7B"}
+    res_ui = await client.post("/api/v1/execute", json=payload_ui_qwen)
+    assert res_ui.status_code == 200
+    data_ui = res_ui.json()
+    assert data_ui["routed_to"] == "local"
+
+    # Test generic "local"
+    payload_local = {"prompt": "Hello Local", "model": "local"}
+    res_loc = await client.post("/api/v1/execute", json=payload_local)
+    assert res_loc.status_code == 200
+    assert res_loc.json()["routed_to"] == "local"
+
+    # Test frontier model overrides
     payload_gemini = {"prompt": "Hello Gemini", "model": "gemini-2.5-flash"}
     res_gemini = await client.post("/api/v1/execute", json=payload_gemini)
     assert res_gemini.status_code == 200
     data_gemini = res_gemini.json()
     assert data_gemini["routed_to"] == "frontier"
+
+    # Test UI dropdown format: "Gemini 2.5 Flash"
+    payload_ui_gemini = {"prompt": "Hello Gemini Flash", "model": "Gemini 2.5 Flash"}
+    res_ui_gem = await client.post("/api/v1/execute", json=payload_ui_gemini)
+    assert res_ui_gem.status_code == 200
+    assert res_ui_gem.json()["routed_to"] == "frontier"
 
 
 @pytest.mark.asyncio
@@ -132,3 +152,4 @@ async def test_execute_stop_endpoint(client: AsyncClient):
     data = res.json()
     assert data["status"] in ("idle", "stopped")
     assert data["session_id"] == "test_session_123"
+

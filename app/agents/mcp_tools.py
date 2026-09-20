@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 from typing import Any
@@ -27,16 +28,13 @@ def create_mcp_tool(
 
         with logfire.span("Tool: {tool_name}", tool_name=tool_name, arguments=kwargs) as span:
             if ctx.deps and ctx.deps.event_queue:
-                try:
+                with contextlib.suppress(Exception):
                     await ctx.deps.event_queue.put({
                         "type": "tool_start",
                         "id": call_id,
                         "tool_name": tool_name,
                         "arguments": kwargs,
-                        "status": "running",
                     })
-                except Exception as q_err:
-                    logger.debug("failed_to_queue_tool_start", error=str(q_err))
 
             if not ctx.deps or not ctx.deps.mcp_client:
                 err_msg = f"Error: MCP client is not configured for tool '{tool_name}'."
@@ -44,7 +42,7 @@ def create_mcp_tool(
                 span.set_attribute("status", "error")
                 span.set_attribute("error", err_msg)
                 if ctx.deps and ctx.deps.event_queue:
-                    try:
+                    with contextlib.suppress(Exception):
                         await ctx.deps.event_queue.put({
                             "type": "tool_done",
                             "id": call_id,
@@ -53,8 +51,6 @@ def create_mcp_tool(
                             "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
                             "error": err_msg,
                         })
-                    except Exception:
-                        pass
                 return err_msg
 
             try:
@@ -66,7 +62,7 @@ def create_mcp_tool(
                 span.set_attribute("response", str(raw_result)[:4000] if raw_result is not None else None)
 
                 if ctx.deps and ctx.deps.event_queue:
-                    try:
+                    with contextlib.suppress(Exception):
                         await ctx.deps.event_queue.put({
                             "type": "tool_done",
                             "id": call_id,
@@ -75,8 +71,6 @@ def create_mcp_tool(
                             "duration_ms": duration_ms,
                             "result_preview": str(raw_result)[:300] if raw_result is not None else None,
                         })
-                    except Exception:
-                        pass
                 return str(raw_result)
             except Exception as e:
                 duration_ms = round((time.perf_counter() - t0) * 1000, 1)
@@ -88,7 +82,7 @@ def create_mcp_tool(
                 span.set_attribute("error", str(e))
 
                 if ctx.deps and ctx.deps.event_queue:
-                    try:
+                    with contextlib.suppress(Exception):
                         await ctx.deps.event_queue.put({
                             "type": "tool_done",
                             "id": call_id,
@@ -97,8 +91,6 @@ def create_mcp_tool(
                             "duration_ms": duration_ms,
                             "error": str(e),
                         })
-                    except Exception:
-                        pass
                 return f"Error executing tool '{tool_name}': {e!s}"
 
     desc = description or f"MCP Tool: {tool_name}"

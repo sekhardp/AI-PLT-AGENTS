@@ -19,7 +19,13 @@ def extract_usage_dict(usage: Any) -> dict[str, int]:
     }
 
 
-def resolve_pydantic_model(llm_client: Any, target: str | None = None, prompt: str = "", model_name: str | None = None) -> Any:
+def resolve_pydantic_model(
+    llm_client: Any,
+    target: str | None = None,
+    prompt: str = "",
+    model_name: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> Any:
     """Resolve the appropriate Pydantic AI Model instance from an LLM client or fallback bridge."""
     # 1. Check if LLM client provides get_pydantic_model
     if hasattr(llm_client, "get_pydantic_model"):
@@ -64,6 +70,7 @@ def resolve_pydantic_model(llm_client: Any, target: str | None = None, prompt: s
             prompt=prompt,
             tools=tools_list if tools_list else None,
             chat_history=chat_history,
+            context=context,
         )
         if resp.tool_calls and not has_tool_return:
             parts: list[Any] = [
@@ -73,7 +80,7 @@ def resolve_pydantic_model(llm_client: Any, target: str | None = None, prompt: s
         return ModelResponse(parts=[TextPart(resp.content)])
 
     async def _bridge_stream(messages: list[Any], info: Any) -> AsyncGenerator[str, None]:
-        async for chunk in llm_client.stream(prompt=prompt):
+        async for chunk in llm_client.stream(prompt=prompt, context=context):
             yield chunk
 
     return FunctionModel(_bridge_fn, stream_function=_bridge_stream)

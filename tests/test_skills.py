@@ -70,6 +70,7 @@ def test_presentation_skill_discovery():
 async def test_load_skill_tool_dynamic_execution():
     """Verify that load_skill tool allows the LLM to fetch full skill instructions at runtime."""
     from unittest.mock import MagicMock
+
     from app.agents.deps import AgentDeps
     from app.agents.mcp_tools import create_load_skill_tool
 

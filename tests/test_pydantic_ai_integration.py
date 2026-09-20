@@ -81,11 +81,10 @@ def test_logfire_settings():
 
 
 @pytest.mark.asyncio
-async def test_fallback_model_integration():
+async def test_router_client_pydantic_models_and_orchestrator_fallback(registry: AgentRegistry):
     from app.clients.local_llm_client import LocalLLMClient
     from app.clients.router_client import SmartRouterClient
     from app.router.smart_router import RoutingStrategy, SmartAIRouter
-    from pydantic_ai.models.fallback import FallbackModel
     from pydantic_ai.models.test import TestModel
 
     local_client = LocalLLMClient(base_url="http://mock-local:8000/v1")
@@ -96,10 +95,13 @@ async def test_fallback_model_integration():
     router = SmartAIRouter(default_strategy=RoutingStrategy.AUTO, fallback_enabled=True)
     router_client = SmartRouterClient(frontier_client=frontier_client, local_client=local_client, router=router)
 
-    fallback_model = router_client.get_pydantic_model(target="local")
-    assert isinstance(fallback_model, FallbackModel)
+    local_model = router_client.get_pydantic_model(target="local")
+    assert local_model is not None
 
-    agent = Agent(model=fallback_model)
+    frontier_model = router_client.get_pydantic_model(target="frontier")
+    assert frontier_model is not None
+
+    agent = Agent(model=local_model)
     res = await agent.run("Test query")
     assert res.output == "Local text"
     await local_client.aclose()

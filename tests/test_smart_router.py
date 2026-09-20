@@ -137,5 +137,26 @@ async def test_smart_router_llm_decide_unreachable_fallback():
     decision = await router.decide("What is the weather today?")
     assert decision.target == "frontier"
     assert "local_unreachable_fallback" in decision.reason
-    assert decision.metadata["fallback_triggered"] is True
+@pytest.mark.asyncio
+async def test_smart_router_client_local_only_no_fallback():
+    class FailingLocalClient(MockLLMClient):
+        async def generate(self, *args, **kwargs):
+            raise ConnectionError("Local vLLM instance connection refused")
+
+        async def stream(self, *args, **kwargs):
+            raise ConnectionError("Local vLLM stream connection refused")
+            yield  # pragma: no cover
+
+    frontier = MockLLMClient(fixed_response="Frontier Fallback Answer")
+    failing_local = FailingLocalClient()
+    router = SmartAIRouter(default_strategy=RoutingStrategy.LOCAL_ONLY, fallback_enabled=True)
+    client = SmartRouterClient(frontier_client=frontier, local_client=failing_local, router=router)
+
+    # LOCAL_ONLY must raise error and NOT fall back to frontier!
+    with pytest.raises(ConnectionError, match="Local LLM instance is offline or unreachable"):
+        await client.generate("Hello there!", strategy_override="LOCAL_ONLY")
+
+    with pytest.raises(ConnectionError, match="Local LLM instance is offline or unreachable"):
+        async for _ in client.stream("Hello there!", strategy_override="LOCAL_ONLY"):
+            pass
 

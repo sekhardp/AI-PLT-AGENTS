@@ -158,7 +158,7 @@ class SkillRegistry:
             is_relevant = False
 
             # Check presentation / storytelling triggers
-            if "presentation" in name_lower or "storytelling" in name_lower:
+            if "presentation" in name_lower or "storytelling" in name_lower or "presentation" in desc_lower:
                 if any(w in prompt_lower for w in ("presentation", "slide", "deck", "pitch", "powerpoint", "pptx", "briefing", "qbr")):
                     is_relevant = True
 

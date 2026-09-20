@@ -37,6 +37,44 @@ async def stop_execution(req: StopExecuteRequest, request: Request):
     return {"status": "idle", "session_id": sid, "message": "No running agent execution found for session"}
 
 
+def parse_model_selection(
+    model_raw: str | None,
+    local_client: Any | None,
+    gemini_client: Any | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Parse user model preference into (routed_to, model_name, routing_strategy).
+
+    Returns (None, None, None) if 'auto' or unspecified.
+    """
+    if not model_raw or model_raw.strip().lower() in ("auto", "none", ""):
+        return None, None, None
+
+    raw = model_raw.strip()
+    low = raw.lower().replace("_", "-").replace(" ", "-")
+
+    # Local model aliases
+    local_default_name = getattr(local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct")
+    if (
+        "qwen" in low
+        or "local" in low
+        or low in ("vllm", "ollama")
+        or raw == local_default_name
+    ):
+        return "local", local_default_name, "LOCAL_ONLY"
+
+    # Frontier model aliases
+    frontier_default_name = getattr(gemini_client, "model_name", "gemini-2.5-flash")
+    if "gemini" in low or "frontier" in low or "vertex" in low or raw == frontier_default_name:
+        if "pro" in low:
+            model_name = "gemini-1.5-pro" if "1.5" in low else "gemini-2.5-pro"
+        else:
+            model_name = "gemini-2.5-flash"
+        return "frontier", model_name, "FRONTIER_ONLY"
+
+    # Direct custom model string
+    return None, raw, None
+
+
 @router.post("", response_model=ExecuteResponse, tags=["Execution"])
 async def execute_agent(req: ExecuteRequest, request: Request):
     registry = get_registry(request)
@@ -67,24 +105,29 @@ async def execute_agent(req: ExecuteRequest, request: Request):
     complexity_score = None
 
     # Handle model preference override
-    if req.model and req.model.strip().lower() != "auto":
-        clean_model = req.model.strip()
-        clean_model_lower = clean_model.lower()
-        if clean_model_lower in ("qwen/qwen2.5-7b-instruct", "qwen-2.5-7b", "local", "qwen"):
+    forced_routed_to, forced_model_name, forced_strategy = parse_model_selection(
+        req.model, local_client, gemini_client
+    )
+
+    if forced_strategy:
+        routed_to = forced_routed_to
+        model_name = forced_model_name
+        context["routing_strategy"] = forced_strategy
+        context["routed_to"] = routed_to
+        context["model"] = model_name
+    elif req.routing_strategy:
+        strat = req.routing_strategy.upper()
+        context["routing_strategy"] = strat
+        if strat == "LOCAL_ONLY":
             routed_to = "local"
             model_name = getattr(local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct")
-            context["routing_strategy"] = "LOCAL_ONLY"
             context["routed_to"] = "local"
             context["model"] = model_name
-        elif clean_model_lower in ("gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-pro", "frontier"):
+        elif strat == "FRONTIER_ONLY":
             routed_to = "frontier"
-            model_name = clean_model if clean_model_lower != "frontier" else getattr(gemini_client, "model_name", "gemini-2.5-flash")
-            context["routing_strategy"] = "FRONTIER_ONLY"
+            model_name = getattr(gemini_client, "model_name", "gemini-2.5-flash")
             context["routed_to"] = "frontier"
             context["model"] = model_name
-        else:
-            context["model"] = clean_model
-            model_name = clean_model
     elif ai_router:
         decision = ai_router.classify(
             req.prompt, strategy_override=req.routing_strategy, context=context
@@ -97,6 +140,8 @@ async def execute_agent(req: ExecuteRequest, request: Request):
             if decision.target == "local"
             else getattr(gemini_client, "model_name", "gemini-2.5-flash")
         )
+        context["routed_to"] = routed_to
+        context["model"] = model_name
 
     if req.stream:
         sid = req.session_id or ""
@@ -123,6 +168,25 @@ async def execute_agent(req: ExecuteRequest, request: Request):
                     current_model = context.get("model", model_name or "Qwen/Qwen2.5-7B-Instruct")
 
                     if isinstance(item, dict):
+                        event_type = item.get("type")
+                        if event_type == "routing_fallback":
+                            fb_routed_to = item.get("routed_to", "frontier")
+                            fb_model = item.get("model", "gemini-2.5-flash")
+                            current_routed_to = fb_routed_to
+                            current_model = fb_model
+                            fallback_event = {
+                                "type": "routing_decision",
+                                "stage": "fallback",
+                                "routed_to": fb_routed_to,
+                                "model": fb_model,
+                                "agent_id": agent.agent_id,
+                                "fallback_triggered": True,
+                                "reason": item.get("reason", "Local LLM unreachable, fell back to Frontier"),
+                            }
+                            yield f"data: {json.dumps(fallback_event)}\n\n"
+                            await asyncio.sleep(0)
+                            continue
+
                         tool_event = dict(item)
                         tool_event["agent_id"] = agent.agent_id
                         tool_event["routed_to"] = current_routed_to
@@ -217,6 +281,9 @@ async def execute_agent(req: ExecuteRequest, request: Request):
             total_tokens=total_tokens,
             metadata=result.metadata,
         )
+    except ConnectionError as ce:
+        logger.error("execute_agent_connection_error", error=str(ce))
+        raise HTTPException(status_code=503, detail=str(ce)) from ce
     finally:
         if sid and _active_executions.get(sid) is current_task:
             _active_executions.pop(sid, None)
