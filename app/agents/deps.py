@@ -19,6 +19,7 @@ class AgentDeps:
     session_context: dict[str, Any] = field(default_factory=dict)
     event_queue: asyncio.Queue[dict[str, Any]] | None = None
     active_prompt: str = ""
+    loaded_skills: set[str] = field(default_factory=set)
 
     @classmethod
     def from_context(

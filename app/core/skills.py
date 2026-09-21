@@ -30,18 +30,35 @@ class SkillRegistry:
         if not self.skills_dir.exists():
             return
 
-        for skill_file in self.skills_dir.glob("*/SKILL.md"):
+        for skill_file in sorted(self.skills_dir.glob("*/SKILL.md")):
             try:
                 content = skill_file.read_text(encoding="utf-8")
                 parsed = self._parse_skill_file(content)
                 if parsed:
                     skill_name = parsed["name"]
                     self._skills[skill_name] = parsed
-                    for tool in parsed.get("tools", []):
-                        if tool not in self._tool_to_skill or skill_name.replace("-", "_") in tool:
-                            self._tool_to_skill[tool] = skill_name
             except Exception as e:
                 logger.warning("skill_load_failed", file=str(skill_file), error=str(e))
+
+        # Build tool to skill mapping prioritizing direct server namespace ownership
+        for skill_name, data in self._skills.items():
+            s_tokens = set(re.split(r"[-_]", skill_name.lower()))
+            for tool in data.get("tools", []):
+                clean_t = tool.removeprefix("mcp-")
+                bare_t = clean_t.split("__", 1)[-1] if "__" in clean_t else clean_t
+                server_prefix = clean_t.split("__", 1)[0].replace("_server", "") if "__" in clean_t else ""
+                server_tokens = set(re.split(r"[-_]", server_prefix.lower())) if server_prefix else set()
+
+                # Calculate token overlap score between skill name and server prefix
+                overlap = len(s_tokens & server_tokens) if server_tokens else 0
+
+                for t_key in (tool, f"mcp-{tool}", clean_t, bare_t, f"mcp-{bare_t}"):
+                    if t_key not in self._tool_to_skill:
+                        self._tool_to_skill[t_key] = (overlap, skill_name)
+                    else:
+                        prev_overlap, _ = self._tool_to_skill[t_key]
+                        if overlap > prev_overlap:
+                            self._tool_to_skill[t_key] = (overlap, skill_name)
 
     def get_skill(self, skill_name: str) -> dict[str, Any] | None:
         """Retrieve a specific skill by its name."""
@@ -102,10 +119,21 @@ class SkillRegistry:
 
     def get_skill_for_tool(self, tool_name: str) -> dict[str, Any] | None:
         """Retrieve the skill specification for a given MCP tool name."""
-        skill_name = self._tool_to_skill.get(tool_name)
-        if not skill_name and "__" in tool_name:
-            bare_tool = tool_name.split("__", 1)[-1]
-            skill_name = self._tool_to_skill.get(bare_tool)
+        clean_name = tool_name.removeprefix("mcp-")
+        entry = self._tool_to_skill.get(tool_name) or self._tool_to_skill.get(clean_name)
+        if not entry and "__" in clean_name:
+            bare_tool = clean_name.split("__", 1)[-1]
+            entry = self._tool_to_skill.get(bare_tool)
+
+        skill_name = entry[1] if isinstance(entry, tuple) else entry
+
+        if not skill_name:
+            for s_name in self._skills:
+                s_prefix = s_name.replace("-", "_")
+                if clean_name.startswith(s_prefix) or s_prefix in clean_name:
+                    skill_name = s_name
+                    break
+
         if skill_name:
             return self._skills.get(skill_name)
         return None

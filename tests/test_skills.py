@@ -88,8 +88,87 @@ async def test_load_skill_tool_dynamic_execution():
     # Fuzzy match skill load (e.g. LLM passes sales_products_analytics or partial name)
     fuzzy_res = await tool.function(mock_ctx, skill_name="sales_products_analytics")
     assert "sales-products-analytics" in fuzzy_res
+    assert "sales-products-analytics" in mock_ctx.deps.loaded_skills
 
     # Non-existent skill returns error with available skills list
     err_res = await tool.function(mock_ctx, skill_name="non-existent-domain")
     assert "Error: Skill 'non-existent-domain' not found" in err_res
     assert "Available skills in directory:" in err_res
+
+
+@pytest.mark.asyncio
+async def test_tool_gating_protocol_enforcement():
+    """Verify that domain tools linked to skills are blocked until load_skill is executed."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.agents.deps import AgentDeps
+    from app.agents.mcp_tools import create_load_skill_tool, create_mcp_tool
+
+    mock_mcp_client = AsyncMock()
+    mock_mcp_client.call_tool.return_value = '{"status": "success", "rows": []}'
+
+    deps = AgentDeps(skill_registry=skill_registry, mcp_client=mock_mcp_client)
+    mock_ctx = MagicMock()
+    mock_ctx.deps = deps
+
+    sales_tool = create_mcp_tool("sales_products_server__execute_sql_query", "Execute query")
+    load_skill_tool = create_load_skill_tool()
+
+    # 1. Attempt to execute domain tool BEFORE loading skill -> BLOCKED
+    blocked_res = await sales_tool.function(mock_ctx, query="SELECT * FROM products")
+    assert "PROTOCOL ENFORCEMENT" in blocked_res
+    assert "requires the 'sales-products-analytics' skill playbook" in blocked_res
+    assert mock_mcp_client.call_tool.call_count == 0
+
+    # 2. Execute load_skill -> Registers skill in loaded_skills
+    load_res = await load_skill_tool.function(mock_ctx, skill_name="sales-products-analytics")
+    assert "sales-products-analytics" in load_res
+    assert "sales-products-analytics" in deps.loaded_skills
+
+    # 3. Attempt to execute domain tool AFTER loading skill -> ALLOWED
+    success_res = await sales_tool.function(mock_ctx, query="SELECT * FROM products")
+    assert success_res == '{"status": "success", "rows": []}'
+    assert mock_mcp_client.call_tool.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_generic_tool_executes_without_skill():
+    """Verify that generic tools (not associated with any skill) execute immediately without gating."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.agents.deps import AgentDeps
+    from app.agents.mcp_tools import create_mcp_tool
+
+    mock_mcp_client = AsyncMock()
+    mock_mcp_client.call_tool.return_value = "Sunny, 72F"
+
+    deps = AgentDeps(skill_registry=skill_registry, mcp_client=mock_mcp_client)
+    mock_ctx = MagicMock()
+    mock_ctx.deps = deps
+
+    weather_tool = create_mcp_tool("get_weather", "Get current weather")
+    res = await weather_tool.function(mock_ctx, location="San Francisco")
+    assert res == "Sunny, 72F"
+    assert mock_mcp_client.call_tool.call_count == 1
+
+
+def test_build_mcp_tools_annotation():
+    """Verify build_mcp_tools_from_definitions annotates domain tools with required skill."""
+    from app.agents.mcp_tools import build_mcp_tools_from_definitions
+
+    tool_defs = [
+        {"name": "sales_products_server__execute_sql_query", "description": "Execute SQL queries"},
+        {"name": "get_weather", "description": "Fetch weather"},
+    ]
+    tools = build_mcp_tools_from_definitions(tool_defs, include_skill_loader=True)
+
+    tool_map = {t.name: t for t in tools}
+    assert "load_skill" in tool_map
+    assert "PRIORITY TOOL - CALL FIRST" in tool_map["load_skill"].description
+
+    assert "sales_products_server__execute_sql_query" in tool_map
+    assert "[REQUIRES SKILL: 'sales-products-analytics']" in tool_map["sales_products_server__execute_sql_query"].description
+
+    assert "get_weather" in tool_map
+    assert "[REQUIRES SKILL" not in tool_map["get_weather"].description
+
