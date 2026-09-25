@@ -205,6 +205,11 @@ class SkillRegistry:
                 if any(w in prompt_lower for w in ("sales", "product", "customer", "inventory", "retail", "store", "order", "omnichannel", "regional", "restock")):
                     is_relevant = True
 
+            # Check weather / air quality triggers
+            elif "weather" in name_lower or "air" in name_lower:
+                if any(w in prompt_lower for w in ("weather", "temperature", "forecast", "air quality", "aqi", "pm2.5", "timezone", "rain", "humidity", "wind")):
+                    is_relevant = True
+
             # Check tool triggers
             if not is_relevant:
                 for t in tools:

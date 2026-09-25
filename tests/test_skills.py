@@ -172,3 +172,17 @@ def test_build_mcp_tools_annotation():
     assert "get_weather" in tool_map
     assert "[REQUIRES SKILL" not in tool_map["get_weather"].description
 
+
+def test_weather_skill_discovery_and_gating():
+    """Verify weather-air-quality skill is discovered and gates get_current_weather."""
+    skill_registry.reload_skills()
+    weather_skill = skill_registry.get_skill_for_tool("get_current_weather")
+    assert weather_skill is not None
+    assert weather_skill["name"] == "weather-air-quality"
+    assert "get_current_weather" in weather_skill["tools"]
+
+    weather_server_skill = skill_registry.get_skill_for_tool("weather_server__get_current_weather")
+    assert weather_server_skill is not None
+    assert weather_server_skill["name"] == "weather-air-quality"
+
+

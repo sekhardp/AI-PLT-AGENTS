@@ -1,6 +1,23 @@
 ---
 name: weather-air-quality
 description: Comprehensive real-time weather forecasts, air quality indices, and timezone intelligence guide powered by the Weather MCP Server and Open-Meteo.
+tools:
+  - weather_server__get_current_weather
+  - weather_server__get_weather_by_datetime_range
+  - weather_server__get_weather_details
+  - weather_server__get_air_quality
+  - weather_server__get_air_quality_details
+  - weather_server__get_current_datetime
+  - weather_server__get_timezone_info
+  - weather_server__convert_time
+  - get_current_weather
+  - get_weather_by_datetime_range
+  - get_weather_details
+  - get_air_quality
+  - get_air_quality_details
+  - get_current_datetime
+  - get_timezone_info
+  - convert_time
 ---
 
 # Weather & Air Quality Intelligence Skill Guide
