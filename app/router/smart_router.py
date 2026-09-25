@@ -33,10 +33,10 @@ class RoutingDecision:
 
 ROUTER_DECISION_PROMPT = (
     "You are an intelligent AI router. Your job is to classify incoming user questions into one of two execution tiers:\n"
-    '- "local": If the question is simple, routine, a general greeting, everyday task, fact lookup, or just a single tool-call question (e.g. check weather, simple database query).\n'
-    '- "frontier": If the question is complex, requires deep reasoning, multi-step planning, generating presentations/slide decks, analyzing procurement metrics, querying BigQuery/RAG, or detailed analysis.\n\n'
+    '- "frontier": ONLY if the question is related to weather, air quality, weather forecasts, timezones, Open-Meteo, or Weather MCP server tools.\n'
+    '- "local": For all other questions (e.g. general questions, conversation, database analysis, BigQuery, sales, presentations, coding, math, general tasks).\n\n'
     'Respond ONLY with a valid JSON object in this format:\n'
-    '{"target": "local", "reason": "simple query"} or {"target": "frontier", "reason": "complex reasoning"}\n'
+    '{"target": "frontier", "reason": "weather query"} or {"target": "local", "reason": "non-weather query"}\n'
     'Do NOT output markdown fences, code blocks, or any other text.'
 )
 
@@ -211,20 +211,18 @@ class SmartAIRouter:
         if active_strategy == RoutingStrategy.FRONTIER_ONLY or (not self.is_local_available and self.fallback_enabled):
             return RoutingDecision(target="frontier", strategy=active_strategy, complexity_score=0.85, reason="circuit_breaker_or_frontier_only")
 
-        # Fast heuristic fallback: complex keywords, presentations, and analytics go to frontier
-        complex_keywords = (
-            "analyze", "analysis", "architect", "distributed", "consensus", "paxos",
-            "proof", "verification", "slide", "presentation", "deck", "pptx", "powerpoint",
-            "bigquery", "spend", "procurement", "kpi", "dashboard", "trend",
-            "scorecard", "supplier", "savings", "rag", "synthesize", "executive", "briefing",
+        # Only weather-related queries route to frontier; all other queries route to local
+        weather_keywords = (
+            "weather", "temperature", "forecast", "air quality", "aqi", "pm2.5", "timezone",
+            "rain", "humidity", "wind", "open-meteo", "weather-server", "weather_server",
         )
-        is_complex = any(w in prompt.lower() for w in complex_keywords)
-        target = "frontier" if is_complex else "local"
+        is_weather = any(w in prompt.lower() for w in weather_keywords)
+        target = "frontier" if is_weather else "local"
         return RoutingDecision(
             target=target,
             strategy=active_strategy,
-            complexity_score=0.85 if is_complex else 0.15,
-            reason=f"heuristic_{target}",
+            complexity_score=0.85 if is_weather else 0.15,
+            reason="weather_to_frontier" if is_weather else "non_weather_to_local",
         )
 
     def status(self) -> dict[str, Any]:

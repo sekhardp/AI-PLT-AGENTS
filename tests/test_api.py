@@ -90,7 +90,7 @@ async def test_router_endpoints(client: AsyncClient):
 
     # 2. Router classify
     classify_payload = {
-        "prompt": "Analyze race conditions in distributed systems and write a formal verification mathematical proof."
+        "prompt": "What is the live weather forecast and temperature in Vijayawada?"
     }
     res_classify = await client.post("/api/v1/router/classify", json=classify_payload)
     assert res_classify.status_code == 200

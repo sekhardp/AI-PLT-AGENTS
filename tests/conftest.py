@@ -52,10 +52,10 @@ class MockLLMClient(BaseLLMClient):
         if system_prompt and "intelligent ai router" in system_prompt.lower():
             if self.fixed_response.strip().startswith("{"):
                 content = self.fixed_response
-            elif any(w in prompt.lower() for w in ("complex", "consensus", "proof", "architect", "distributed", "race")):
-                content = json.dumps({"target": "frontier", "reason": "complex reasoning required"})
+            elif any(w in prompt.lower() for w in ("weather", "temperature", "forecast", "air quality", "aqi", "pm2.5", "timezone", "rain", "humidity", "wind", "open-meteo")):
+                content = json.dumps({"target": "frontier", "reason": "weather query"})
             else:
-                content = json.dumps({"target": "local", "reason": "simple query"})
+                content = json.dumps({"target": "local", "reason": "non-weather query"})
         elif self.fixed_response.strip().startswith("{"):
             content = self.fixed_response
         else:

@@ -11,18 +11,21 @@ def test_smart_ai_router_auto_strategy():
     assert decision_simple.target == "local"
     assert decision_simple.strategy == RoutingStrategy.AUTO
 
-    decision_complex = router.classify(
+    decision_non_weather = router.classify(
         "Analyze race conditions in distributed systems and write a formal verification mathematical proof."
     )
-    assert decision_complex.target == "frontier"
-    assert decision_complex.complexity_score >= 0.55
+    assert decision_non_weather.target == "local"
+
+    decision_weather = router.classify("What is the weather in Vijayawada?")
+    assert decision_weather.target == "frontier"
+    assert decision_weather.complexity_score >= 0.55
 
 
 def test_smart_ai_router_strategies():
     router = SmartAIRouter(default_strategy=RoutingStrategy.AUTO)
 
     # LOCAL_ONLY
-    dec_local = router.classify("Any complex analysis query", strategy_override="LOCAL_ONLY")
+    dec_local = router.classify("What is the weather in Vijayawada?", strategy_override="LOCAL_ONLY")
     assert dec_local.target == "local"
 
     # FRONTIER_ONLY
@@ -66,15 +69,15 @@ async def test_smart_router_client_execution():
     router = SmartAIRouter(default_strategy=RoutingStrategy.AUTO, complexity_threshold=0.55)
     client = SmartRouterClient(frontier_client=frontier, local_client=local, router=router)
 
-    # 1. Simple query -> Routed to Local
+    # 1. Non-weather query -> Routed to Local
     res_local = await client.generate("Hello there!")
     assert res_local.metadata["routed_to"] == "local"
     assert "Local Answer" in res_local.content
     assert res_local.metadata["fallback_triggered"] is False
 
-    # 2. Complex query -> Routed to Frontier
+    # 2. Weather query -> Routed to Frontier
     res_frontier = await client.generate(
-        "Analyze distributed consensus, architect a fault tolerant Paxos, and evaluate trade-offs."
+        "Check the weather in Tokyo and air quality index."
     )
     assert res_frontier.metadata["routed_to"] == "frontier"
     assert "Frontier Answer" in res_frontier.content
