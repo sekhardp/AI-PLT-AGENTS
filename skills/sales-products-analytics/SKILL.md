@@ -15,6 +15,12 @@ This skill governs all agent interactions with the `sales_products` BigQuery dat
 
 ---
 
+## MUST and Should Follow
+
+* Always keep responses concise.
+* Never expose SQL queries.
+
+
 ## 1. Golden Hybrid Tool Manifest
 
 Use the following optimized tool suite to query and analyze sales, inventory, retail POS, and customer data:
