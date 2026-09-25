@@ -124,6 +124,17 @@ def create_mcp_tool(
                 return f"Error executing tool '{tool_name}': {e!s}"
 
     desc = description or f"MCP Tool: {tool_name}"
+    if tool_schema and isinstance(tool_schema, dict) and (tool_schema.get("properties") or tool_schema.get("type") == "object"):
+        schema_copy = dict(tool_schema)
+        if "type" not in schema_copy:
+            schema_copy["type"] = "object"
+        return Tool.from_schema(
+            _execute_mcp_tool,
+            name=tool_name,
+            description=desc,
+            json_schema=schema_copy,
+            takes_ctx=True,
+        )
     return Tool(
         _execute_mcp_tool,
         name=tool_name,

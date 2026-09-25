@@ -107,3 +107,22 @@ async def test_router_client_pydantic_models_and_orchestrator_fallback(registry:
     await local_client.aclose()
     await frontier_client.aclose()
 
+
+@pytest.mark.asyncio
+async def test_create_mcp_tool_preserves_parameter_schema():
+    """Verify create_mcp_tool preserves JSON schema for Google / OpenAI models."""
+    tool = create_mcp_tool(
+        tool_name="weather_server__get_current_weather",
+        description="Get current weather",
+        tool_schema={
+            "type": "object",
+            "properties": {"city": {"type": "string", "description": "City name"}},
+            "required": ["city"],
+        },
+    )
+    tool_def = await tool.prepare_tool_def(None)
+    assert tool_def.name == "weather_server__get_current_weather"
+    assert "city" in tool_def.parameters_json_schema.get("properties", {})
+    assert tool_def.parameters_json_schema.get("required") == ["city"]
+
+
