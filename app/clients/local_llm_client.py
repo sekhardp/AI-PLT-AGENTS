@@ -25,7 +25,7 @@ class LocalLLMClient(BaseLLMClient):
     def __init__(
         self,
         base_url: str = "http://localhost:8000/v1",
-        model_name: str = "Qwen/Qwen2.5-7B-Instruct",
+        model_name: str = "Qwen/Qwen2.5-Coder-14B-Instruct",
         api_key: str | None = None,
         timeout_seconds: int = 60,
         default_temperature: float = 0.7,

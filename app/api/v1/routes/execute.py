@@ -53,7 +53,7 @@ def parse_model_selection(
     low = raw.lower().replace("_", "-").replace(" ", "-")
 
     # Local model aliases
-    local_default_name = getattr(local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct")
+    local_default_name = getattr(local_client, "model_name", "Qwen/Qwen2.5-Coder-14B-Instruct")
     if (
         "qwen" in low
         or "local" in low
@@ -120,7 +120,7 @@ async def execute_agent(req: ExecuteRequest, request: Request):
         context["routing_strategy"] = strat
         if strat == "LOCAL_ONLY":
             routed_to = "local"
-            model_name = getattr(local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct")
+            model_name = getattr(local_client, "model_name", "Qwen/Qwen2.5-Coder-14B-Instruct")
             context["routed_to"] = "local"
             context["model"] = model_name
         elif strat == "FRONTIER_ONLY":
@@ -136,7 +136,7 @@ async def execute_agent(req: ExecuteRequest, request: Request):
         complexity_score = decision.complexity_score
         context["complexity_score"] = complexity_score
         model_name = (
-            getattr(local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct")
+            getattr(local_client, "model_name", "Qwen/Qwen2.5-Coder-14B-Instruct")
             if decision.target == "local"
             else getattr(gemini_client, "model_name", "gemini-2.5-flash")
         )
@@ -165,7 +165,7 @@ async def execute_agent(req: ExecuteRequest, request: Request):
                 sent_decision_event = False
                 async for item in agent.stream(req.prompt, context=context):
                     current_routed_to = context.get("routed_to", routed_to or "local")
-                    current_model = context.get("model", model_name or "Qwen/Qwen2.5-7B-Instruct")
+                    current_model = context.get("model", model_name or "Qwen/Qwen2.5-Coder-14B-Instruct")
 
                     if isinstance(item, dict):
                         event_type = item.get("type")

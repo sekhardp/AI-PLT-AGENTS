@@ -6,24 +6,24 @@ from pydantic_ai.models.test import TestModel
 
 @pytest.mark.asyncio
 async def test_local_llm_client_initialization_and_pydantic_model():
-    client = LocalLLMClient(base_url="http://localhost:8000/v1", model_name="Qwen/Qwen2.5-7B-Instruct")
+    client = LocalLLMClient(base_url="http://localhost:8000/v1", model_name="Qwen/Qwen2.5-Coder-14B-Instruct")
     model = client.get_pydantic_model()
     assert model is not None
     assert client.health()["status"] == "configured"
-    assert client.health()["model"] == "Qwen/Qwen2.5-7B-Instruct"
+    assert client.health()["model"] == "Qwen/Qwen2.5-Coder-14B-Instruct"
     await client.aclose()
 
 
 @pytest.mark.asyncio
 async def test_local_llm_client_generate_and_stream():
-    client = LocalLLMClient(base_url="http://localhost:8000/v1", model_name="Qwen/Qwen2.5-7B-Instruct")
+    client = LocalLLMClient(base_url="http://localhost:8000/v1", model_name="Qwen/Qwen2.5-Coder-14B-Instruct")
     # Replace internal model with TestModel for offline unit testing
     client._model = TestModel(custom_output_text="This is a local completion.")
 
     res = await client.generate("Hello local model!", system_prompt="You are a helpful assistant.")
     assert res.content == "This is a local completion."
     assert res.provider == "local_vllm"
-    assert res.model == "Qwen/Qwen2.5-7B-Instruct"
+    assert res.model == "Qwen/Qwen2.5-Coder-14B-Instruct"
     assert res.usage["total_tokens"] > 0
 
     tokens = []
@@ -38,7 +38,7 @@ async def test_local_llm_client_generate_and_stream():
 async def test_local_llm_client_liveness():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/models":
-            return httpx.Response(200, json={"data": [{"id": "Qwen/Qwen2.5-7B-Instruct"}]})
+            return httpx.Response(200, json={"data": [{"id": "Qwen/Qwen2.5-Coder-14B-Instruct"}]})
         return httpx.Response(404)
 
     client = LocalLLMClient(base_url="http://mock-vllm:8000/v1")
@@ -46,5 +46,5 @@ async def test_local_llm_client_liveness():
 
     status = await client.check_liveness()
     assert status["status"] == "healthy"
-    assert "Qwen/Qwen2.5-7B-Instruct" in status["available_models"]
+    assert "Qwen/Qwen2.5-Coder-14B-Instruct" in status["available_models"]
     await client.aclose()
