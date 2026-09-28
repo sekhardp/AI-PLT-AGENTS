@@ -102,7 +102,7 @@ class SmartRouterClient(BaseLLMClient):
                 response.metadata.update(
                     {
                         "routed_to": "local",
-                        "model": getattr(self.local_client, "model_name", "Qwen/Qwen2.5-Coder-14B-Instruct"),
+                        "model": getattr(self.local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct"),
                         "routing_strategy": decision.strategy.value,
                         "complexity_score": decision.complexity_score,
                         "routing_reason": decision.reason,
@@ -199,7 +199,7 @@ class SmartRouterClient(BaseLLMClient):
         )
 
         chosen_model = (
-            getattr(self.local_client, "model_name", "Qwen/Qwen2.5-Coder-14B-Instruct")
+            getattr(self.local_client, "model_name", "Qwen/Qwen2.5-7B-Instruct")
             if decision.target == "local"
             else getattr(self.frontier_client, "model_name", "gemini-2.5-flash")
         )

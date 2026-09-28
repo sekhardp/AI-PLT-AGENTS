@@ -111,14 +111,14 @@ async def test_router_endpoints(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_execute_with_model_override(client: AsyncClient):
     # Test exact full model ID
-    payload = {"prompt": "Hello Qwen", "model": "Qwen/Qwen2.5-Coder-14B-Instruct"}
+    payload = {"prompt": "Hello Qwen", "model": "Qwen/Qwen2.5-7B-Instruct"}
     res = await client.post("/api/v1/execute", json=payload)
     assert res.status_code == 200
     data = res.json()
     assert data["routed_to"] == "local"
 
-    # Test UI dropdown format: "Qwen 2.5 Coder 14B"
-    payload_ui_qwen = {"prompt": "Hello Qwen", "model": "Qwen 2.5 Coder 14B"}
+    # Test UI dropdown format: "Qwen 2.5 7B"
+    payload_ui_qwen = {"prompt": "Hello Qwen", "model": "Qwen 2.5 7B"}
     res_ui = await client.post("/api/v1/execute", json=payload_ui_qwen)
     assert res_ui.status_code == 200
     data_ui = res_ui.json()

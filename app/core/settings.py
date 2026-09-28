@@ -76,7 +76,7 @@ class LocalLLMSettings(BaseSettings):
     )
 
     BASE_URL: str = Field("http://localhost:8000/v1", description="Local LLM service OpenAI-compatible base URL")
-    MODEL: str = Field("Qwen/Qwen2.5-Coder-14B-Instruct", description="Default model name hosted on the local instance")
+    MODEL: str = Field("Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8", description="Default model name hosted on the local instance")
     API_KEY: str | None = Field(None, description="Optional API key for authenticated local endpoints")
     TIMEOUT_SECONDS: int = Field(60, description="Timeout for local LLM requests in seconds")
     TEMPERATURE: float = Field(0.7, description="Default sampling temperature for local LLM")
