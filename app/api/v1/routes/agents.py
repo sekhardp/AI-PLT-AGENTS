@@ -10,9 +10,25 @@ def get_registry(request: Request) -> AgentRegistry:
     return request.app.state.registry
 
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
 @router.get("", response_model=AgentListResponse, tags=["Agents"])
-async def list_agents(request: Request) -> AgentListResponse:
+async def list_agents(request: Request, sync: bool = False) -> AgentListResponse:
     registry = get_registry(request)
+    # Self-healing: if sync requested or only orchestrator is present, discover tools on-demand
+    if sync or registry.count <= 1:
+        mcp_client = getattr(request.app.state, "mcp_client", None)
+        llm_client = getattr(request.app.state, "router_client", None) or getattr(request.app.state, "gemini_client", None)
+        if mcp_client and llm_client:
+            from app.core.bootstrap import sync_mcp_tools
+            try:
+                await sync_mcp_tools(mcp_client, registry, llm_client)
+            except Exception as e:
+                logger.warning("mcp_tools_on_demand_sync_failed", error=str(e))
+
     agents = [AgentInfo(**a.info()) for a in registry.list_agents()]
     return AgentListResponse(agents=agents, total=len(agents))
 
